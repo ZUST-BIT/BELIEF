@@ -1,0 +1,2 @@
+query = "针对Lenvatinib的药物敏感性来说，结合组学的信息，哪类特征（包括基因突变，包括临床特征）的病人更容易出现对Lenvatinib的耐药现象，这类病人在基因组的突变或者转录组的差异基因上有什么特征。"
+# query = "结合组学信息，不同的药物Lenvatinib、sorafenib、regorafenib、apatinib的耐药相关的基因是否存在共性，这些共性基因都是参与什么具体的肿瘤生物学途径的。"
