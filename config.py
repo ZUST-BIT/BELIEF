@@ -1,0 +1,28 @@
+import argparse
+
+def set_argument():
+    parser = argparse.ArgumentParser(prog='MEDAR-QA', description='Medical Question Answering System')
+    parser.add_argument('--project',type=str,default='MEDAR-QA')
+    parser.add_argument('--neo4j_usr',type=str,default='neo4j')
+    parser.add_argument('--neo4j_pwd',type=str,default='12345678')
+    parser.add_argument('--neo4j_url',type=str,default='bolt://localhost:7687')
+    parser.add_argument('--mongo_url',type=str,default='mongodb://172.18.51.200:27017/')
+    parser.add_argument('--db_name',type=str,default='bio')
+    parser.add_argument('--collection_name',type=str,default='pubmed')
+    parser.add_argument('--api_url',type=str,default='https://api.deepseek.com')
+    parser.add_argument('--api_key',type=str,default='sk-0f17b61caf3f48e99944865634bd3a1c')
+    parser.add_argument('--api_url_gpt',type=str,default='https://api.gptsapi.net/v1')
+    parser.add_argument('--api_key_gpt',type=str,default='sk-fo862d690e3eb2114925ad1f12618cf6a2ac6e4f341yl2Ev')
+    parser.add_argument('--fact_jsonl',type=str,default='datafile/fact_corpus_explanatory.jsonl')
+    parser.add_argument('--embedding_model_zh',type=str,default='BAAI/bge-large-zh')
+    parser.add_argument('--faiss_index_path_omic',type=str,default='output/faiss_index_omic.bin')
+    parser.add_argument('--faiss_mapping_path_omic',type=str,default='output/faiss_mapping_omic.json')
+    parser.add_argument('--embedding_model_en',type=str,default='BAAI/bge-large-en-v1.5')
+    parser.add_argument('--faiss_index_path_bio',type=str,default='output/faiss_index_bio.bin')
+    parser.add_argument('--faiss_mapping_path_bio',type=str,default='output/faiss_mapping_bio.json')
+    parser.add_argument('--input_dir',type=str,default='D:/BitLabData/bio关键文档/outputs_final')
+    parser.add_argument('--fact_jsonl_hcc',type=str,default='D:/BitLabData/bio关键文档/facts_cache.jsonl')
+    parser.add_argument('--faiss_index_path_hcc',type=str,default='output/faiss_index_hcc.bin')
+    parser.add_argument('--faiss_mapping_path_hcc',type=str,default='output/faiss_mapping_hcc.json')
+    args = parser.parse_args()
+    return args

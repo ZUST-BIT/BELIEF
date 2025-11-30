@@ -27,7 +27,7 @@ def get_and_convert_data():
         })
     return texts, metas
 
-# texts,metas = get_and_convert_data()
-# print(texts[:5])
-# print("--" * 10)
-# print(metas[:5])
+texts,metas = get_and_convert_data()
+print(texts[:5])
+print("--" * 10)
+print(metas[:5])

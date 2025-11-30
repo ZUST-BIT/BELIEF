@@ -52,32 +52,3 @@ def encode_texts(texts, model_name, batch_size) -> np.ndarray:
     faiss.normalize_L2(embs)
     return embs
 
-def process_omics_data():
-    """ 处理omics数据 """
-    jsonl_file = './omic_data/table_rag_entries.jsonl'
-    faiss_index_file = './omic_data/faiss.index'
-    embedding_file = './omic_data/embeddings.npy'
-    os.makedirs(os.path.dirname(faiss_index_file), exist_ok=True)
-    texts = []
-    # 读取 JSONL 文件
-    with open(jsonl_file, 'r', encoding='utf-8') as f:
-        for line in f:
-            data = json.loads(line)
-            texts.append(data['text'])
-
-    model = SentenceTransformer("paraphrase-Multilingual-MiniLM-L12-v2")
-    # 编码文本数据
-    embeddings = model.encode(
-        texts,
-        show_progress_bar=True,
-        convert_to_numpy=True,
-        normalize_embeddings=True
-    )
-    # 建立 faiss 索引
-    dimention = embeddings.shape[1]
-    index = faiss.IndexFlatIP(dimention)
-    index.add(embeddings)
-    # 保存索引和向量
-    faiss.write_index(index, faiss_index_file)
-    np.save(embedding_file, embeddings)
-    return index, embeddings
