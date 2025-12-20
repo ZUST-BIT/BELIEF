@@ -1,3 +1,4 @@
+# 处理组学表格数据，生成解释型事实知识库
 import pandas as pd
 import json
 from pathlib import Path

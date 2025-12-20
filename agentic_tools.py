@@ -1,74 +1,51 @@
+# 整体智能体代码
 import json
 import os
 import base64
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.prompts import ChatPromptTemplate,PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 from format_config import FormatType, get_format_instructions
 from config import set_argument
-
-# 格式选择器 The Router
-class FormatSelector:
-    def __init__(self, model_name="gpt-4o"):
-        args = set_argument()
-        api_key = args.api_key_gpt
-        base_url = args.api_url_gpt
-        self.llm = ChatOpenAI(
-            model=model_name,
-            api_key=api_key,
-            base_url=base_url,
-            temperature=0)
+from prompt import reasoner_prompt, evaluator_prompt
+model_name = "gpt-4o-mini"
+args = set_argument()
+llm = ChatOpenAI(model=model_name, api_key=args.api_key_gpt, base_url=args.api_url_gpt, temperature=0)
+# 1. 格式选择器 The Router
+def format_selector(query, evidence_text):
+    format_instructions_text = get_format_instructions()
+    system_prompt = f"""
+    你是一个生物医学数据的展示规划师。
+    根据用户的问题和提供的证据数据，选择一种最佳的展示格式。
+    可用格式及适用场景:
+    {format_instructions_text}
         
-    def select(self, query, evidence_text):
-        # 这里直接调用你写的函数，获取最准确的格式说明
-        format_instructions_text = get_format_instructions()
+    判断逻辑补充:
+    1. 哪怕用户问了趋势，但如果证据里全是文字没有数字，必须降级为 TEXT。
+    2. 如果证据包含 'Omic Data' 里的 IC50/AUC 数值，优先考虑 CHART。
+    3. 如果证据包含 'KG Data' 里的实体关系，优先考虑 GRAPH。
+    
+    请仅返回 JSON 格式: {{"selected_format": "...", "reasoning": "..."}}
+    其中 selected_format 必须是上述可用格式的名称之一 (例如 'chart', 'graph', 'text')。
+    """
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        ("user", "User Query: {query}\n\nRefined Evidence Preview:\n{evidence}...")
+    ])
         
-        system_prompt = """
-        你是一个生物医学数据的展示规划师。
-        根据用户的问题和提供的证据数据，选择一种最佳的展示格式。
-        
-        可用格式及适用场景:
-        {format_instructions_text}
-        
-        判断逻辑补充:
-        1. 哪怕用户问了趋势，但如果证据里全是文字没有数字，必须降级为 TEXT。
-        2. 如果证据包含 'Omic Data' 里的 IC50/AUC 数值，优先考虑 CHART。
-        3. 如果证据包含 'KG Data' 里的实体关系，优先考虑 GRAPH。
-        
-        请仅返回 JSON 格式: {{"selected_format": "...", "reasoning": "..."}}
-        其中 selected_format 必须是上述可用格式的名称之一 (例如 'chart', 'graph', 'text')。
-        """
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("user", "User Query: {query}\n\nRefined Evidence Preview:\n{evidence}...")
-        ])
-        
-        # 截取前 3000 字符作为预览
-        chain = prompt | self.llm
-        try:
-            res = chain.invoke({"query": query, "evidence": evidence_text[:3000],"format_instructions_text": format_instructions_text})
-            content = res.content.replace("```json", "").replace("```", "").strip()
-            return json.loads(content)
-        except Exception as e:
-            print(f"Format selection failed: {e}")
-            # 出错时默认回退到 TEXT
-            return {"selected_format": FormatType.TEXT.value, "reasoning": "Error in selection"}
-
+    chain = prompt | llm
+    try:
+        res = chain.invoke({"query": query, "evidence": evidence_text[:3000],"format_instructions_text": format_instructions_text})
+        content = res.content.replace("```json", "").replace("```", "").strip()
+        return json.loads(content)
+    except Exception as e:
+        print(f"Format selection failed: {e}")
+        # 出错时默认回退到 TEXT
+        return {"selected_format": FormatType.TEXT.value, "reasoning": "Error in selection"}
 
 # 2. Coder Agent - 负责生成可执行代码
-class CoderAgent:
-    def __init__(self, model_name="gpt-4o"):
-        args = set_argument()
-        api_key = args.api_key_gpt
-        base_url = args.api_url_gpt
-        self.llm = ChatOpenAI(
-            model=model_name,
-            api_key=api_key,
-            base_url=base_url,
-            temperature=0)
-        
-    def generate_code(self, format_type, evidence_text):
-        system_prompt = """
+def generate_code(format_type, evidence_text):
+    system_prompt = """
         你是一个 Python 数据可视化专家。
         你的任务是：解析提供的文本证据，提取数据，并编写 Python 代码进行绘图。
         
@@ -84,24 +61,20 @@ class CoderAgent:
         4. **输出**: 代码必须保存图片到当前目录，文件名为 'visualization_result.png'。
         5. **格式**: 只返回 Python 代码，不要包含 Markdown 标记。
         """
-        
-        # user_prompt = f"Target Format: {format_type}\n\nEvidence Data:\n{evidence_text}"
-        
-        # res = self.llm.invoke([("system", system_prompt), ("user", user_prompt)])
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("user", "Target Format: {format_type}\n\nEvidence Data:\n{evidence}")
-        ])
-        
-        chain = prompt | self.llm
-        
-        res = chain.invoke({
-            "format_type": format_type,
-            "evidence": evidence_text
-        })
 
-        return res.content.replace("```python", "").replace("```", "").strip()
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        ("user", "Target Format: {format_type}\n\nEvidence Data:\n{evidence}")
+    ])
+    
+    chain = prompt | llm
+    
+    res = chain.invoke({
+        "format_type": format_type,
+        "evidence": evidence_text
+    })
 
+    return res.content.replace("```python", "").replace("```", "").strip()
 
 # 3. 执行器 - 负责执行代码并生成结果图片
 class CodeExecutor:
@@ -122,7 +95,7 @@ class CodeExecutor:
         
 # 4. 生成器 - 负责生成最终答案
 class GeneratorAgent:
-    def __init__(self, model_name="gpt-4o"):
+    def __init__(self, model_name="gpt-4o-mini"):
         args = set_argument()
         api_key = args.api_key_gpt
         base_url = args.api_url_gpt
@@ -223,7 +196,7 @@ class MultimodalContext:
 
 # 6. 推理者- 负责分析证据间的逻辑联系，并生成推理链路
 class ReasonerAgent:
-    def __init__(self, model_name="gpt-4o"):
+    def __init__(self, model_name="gpt-4o-mini"):
         # 自动加载配置
         args = set_argument()
         api_key = args.api_key_gpt
@@ -231,48 +204,40 @@ class ReasonerAgent:
         
         self.llm = ChatOpenAI(
             model=model_name,
-            temperature=0.2, # 推理需要一点创造性，但不能太发散
+            temperature=0.3,
             api_key=api_key,
             base_url=base_url
         )
 
-    def analyze(self, query, full_evidence):
+    def analyze(self, query, user_context,full_evidence):
         """
-        分析现有证据，提取深层逻辑链条
+        深度推理
+        Args:
+            query: 用户问题
+            user_context: 用户提供的背景文本（Ground Truth）
+            full_evidence: 多轮检索得到的所有证据文本
         """
-        system_prompt = """
-        你是一个生物医学逻辑推理引擎 (Reasoner)。你的任务不是重复现有的证据，而是**发现证据之间的联系**并进行**逻辑推演**。
-        
-        请分析用户的问题和提供的多源证据，产出 3-5 条关键洞察 (Key Insights)。
-        
-        推理方向：
-        1. **矛盾检测**：不同证据来源（如KG和文献）之间是否有冲突？
-        2. **路径连接**：如果证据A提到 "药物->基因X"，证据B提到 "基因X->疾病"，请推理出 "药物->疾病" 的潜在机制。
-        3. **假设生成**：基于现有数据，提出合理的科学假设（例如耐药机制）。
-        
-        输出格式：
-        请直接输出 Markdown 格式的列表，每条洞察以 "💡" 开头。不要说废话。
+        user_input_str = f"""
+        User Query: {query}
+        User Context: {user_context if user_context else 'No additional context provided.'}
+        Retrieved Evidence:
+        {full_evidence if full_evidence else 'No evidence retrieved yet.'}
         """
-        
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("user", "User Query: {query}\n\nAccumulated Evidence:\n{evidence}")
-        ])
-        
-        chain = prompt | self.llm
-        
-        # 为了防止 Evidence 过长，这里可以适当截断，或者只给 Reasoner 看最新的部分
-        # 考虑到 GPT-4o 上下文很长，我们先尝试给全部
-        res = chain.invoke({
-            "query": query,
-            "evidence": full_evidence[:10000] 
-        })
-        
-        return res.content.strip()
+
+        messages = [
+            ("system", reasoner_prompt),
+            ("user", user_input_str)
+        ]
+        try:
+            res = self.llm.invoke(messages)
+            return res.content
+        except Exception as e:
+            print(f"Reasoner Error: {e}")
+            return "Error in reasoning process."
 
 # 7. 反思者 - 负责评估证据是否足以回答问题
 class ReflectorAgent:
-    def __init__(self, model_name="gpt-4o"):
+    def __init__(self, model_name="gpt-4o-mini"):
         # 自动加载配置
         args = set_argument()
         api_key = args.api_key_gpt
@@ -329,3 +294,46 @@ class ReflectorAgent:
             print(f"Reflector Error: {e}")
             # 出错时为了防止死循环，保守起见默认通过
             return {"status": "pass", "feedback": "Error parsing decision", "new_query": ""}
+        
+# 8. 证据多维度评估者 - 负责评估证据评估
+class MultiEvaluator:
+    def __init__(self,model_name="gpt-4o-mini"):
+        args = set_argument()
+        api_key = args.api_key_gpt
+        base_url = args.api_url_gpt
+        self.llm = ChatOpenAI(
+            model=model_name,
+            temperature=0,
+            api_key=api_key,
+            base_url=base_url
+        )
+    def evaluate(self, query, context, metadata=None):
+        """
+        多维度证据分析
+        Args：
+            query: 用户问题
+            context: 多轮检索得到的所有证据文本
+            metadata: 元数据(可选)，包括原始问题、问题类型、问题背景、问题
+        """
+        if metadata is None:
+            metadata = "No additional metadata provided."
+        template = PromptTemplate(
+            input_variables = ["question", "context", "metadata"],
+            template = evaluator_prompt
+        )
+        parser = StrOutputParser()
+        chain = template | self.llm | parser
+        try:
+            res = chain.invoke({
+                "question": query,
+                "context": context,
+                "metadata": metadata
+            })
+            return res
+        except Exception as e:
+            print(f"Evaluator Error: {e}")
+            return "Error in evaluation process."
+
+
+
+    

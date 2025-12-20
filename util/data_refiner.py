@@ -1,103 +1,137 @@
+# 对证据进行精炼和格式化，便于后续使用
 class EvidenceRefiner:
     def __init__(self):
         pass
 
+    def _clean_text(self, text):
+        """清理文本，去掉多余换行和空格"""
+        if not text:
+            return ""
+        return " ".join(text.split()).strip()
+
     def _format_text_data(self, data_list, source_name="Literature"):
         """
-        处理 HCC 和 Bio (PubMed) 这种文献类数据
-        格式目标:
-        1. Title: xxx
-           Section: xxx (如果有)
-           Content: xxx
+        优化后的文献证据格式：
+        - 显式 Title
+        - 精炼 Abstract（去掉 Title/Abstract 标签）
+        - 保持多文献边界清晰
         """
+
         if not data_list:
-            return "No data found."
+            return f"No {source_name} data found."
 
-        formatted_str = f"--- {source_name} Evidence ---\n"
-        
-        for idx, item in enumerate(data_list):
-            # 1. 提取 Title
-            title = item.get("title", "Unknown Title").strip()
-            
-            # 2. 提取 Section (HCC数据通常有，PubMed可能没有)
-            section = item.get("section", "")
-            
-            # 3. 提取 Content (优先找 content，没有找 abstract)
-            content = item.get("content") or item.get("abstract") or ""
-            # 清洗一下 content，去掉过多的换行，让它紧凑一点
-            content = content.replace("\n", " ").strip()
+        formatted = [f"--- {source_name} Evidence ---\n"]
 
-            # 4. 组装字符串
-            formatted_str += f"{idx + 1}. Title: {title}\n"
-            if section:
-                formatted_str += f"   Section: {section}\n"
-            formatted_str += f"   Content: {content}\n\n"
-            
-        return formatted_str.strip()
+        for idx, item in enumerate(data_list, start=1):
+            title = self._clean_text(item.get("title", "Unknown Title"))
+            raw_text = item.get("content") or item.get("abstract") or ""
+            abstract = self._clean_text(raw_text)
+
+            # 去掉冗余前缀（Title: / Abstract:）
+            for prefix in ["Title:", "Abstract:", "Background:", "Methods:", "Results:", "Conclusion:"]:
+                abstract = abstract.replace(prefix, "").strip()
+
+            # 控制摘要长度，避免 LLM 过载（可按需要调）
+            if len(abstract) > 1200:
+                abstract = abstract[:1200].rsplit(" ", 1)[0] + "..."
+
+            formatted.append(f"[{idx}] Title: {title}")
+            formatted.append("Summary:")
+            formatted.append(abstract)
+            formatted.append("")  # 文献间空行
+
+        return "\n".join(formatted).strip()
 
     def _format_omic_data(self, data_list):
-        """
-        处理组学数据
-        Omic 数据里的 'text' 字段已经是整理好的描述，直接提取即可
-        """
+        """格式化组学数据"""
         if not data_list:
             return "No Omic data found."
-
         formatted_str = "--- Omic Data Evidence ---\n"
-        
-        for idx, item in enumerate(data_list):
-            # 直接获取 text 字段
-            text = item.get("text", "").strip()
-            formatted_str += f"{idx + 1}. {text}\n\n"
-            
+        for idx, item in enumerate(data_list, start=1):
+            text = self._clean_text(item.get("text", ""))
+            formatted_str += f"{idx}. {text}\n\n"
         return formatted_str.strip()
 
     def _format_kg_data(self, kg_data):
         """
-        处理 KG 数据
-        直接罗列关系，不做复杂清洗
+        将 Knowledge Graph 路径格式化为「推理路径 + 三元组链」
+        目标：LLM 易理解、推理受控、信息不冗余
         """
+
         if not kg_data:
-            return "No Knowledge Graph data found."
+            return "No knowledge graph evidence found."
 
-        formatted_str = "--- Knowledge Graph Evidence ---\n"
-        
-        # kg_data 通常是 {'Lenvatinib one-hop info': [...list...]}
-        if isinstance(kg_data, dict):
-            for key, relations in kg_data.items():
-                formatted_str += f"[{key}]:\n"
-                for rel in relations:
-                    formatted_str += f"- {rel}\n"
-                formatted_str += "\n"
-        else:
-            # 如果结构不一样，直接转字符串
-            formatted_str += str(kg_data)
+        output = []
 
-        return formatted_str.strip()
+        for key, path_info in kg_data.items():
+            output.append(f"### {key}\n")
 
-    def run(self, kg_data, omic_data, hcc_data, bio_data):
+            # 防御式检查
+            if not isinstance(path_info, dict):
+                output.append(f"- {str(path_info)}\n")
+                continue
+
+            nodes = path_info.get("path_nodes", [])
+            rels = path_info.get("path_rels", [])
+            hops = path_info.get("length", len(rels))
+
+            if not nodes or not rels:
+                output.append("- Incomplete reasoning path.\n")
+                continue
+
+            output.append(f"Reasoning Path ({hops} hops):\n")
+
+            for i, rel in enumerate(rels):
+                src_node = nodes[i]
+                dst_node = nodes[i + 1]
+
+                def fmt_node(n):
+                    name = n.get("properties", {}).get("name", "Unknown")
+                    label = n.get("labels", ["Unknown"])[0]
+                    source = n.get("properties", {}).get("source", "Unknown")
+                    return f"{name} [{label} | {source}]"
+
+                src = fmt_node(src_node)
+                dst = fmt_node(dst_node)
+                r_type = rel.get("type", "RelatedTo")
+
+                output.append(
+                    f"{i + 1}. ({src})\n"
+                    f"   --[{r_type}]-->\n"
+                    f"   ({dst})\n"
+                )
+
+        return "\n".join(output).strip()
+
+
+    def run(self, kg_data, bio_data, omic_data=None, hcc_data=None):
         """
-        主入口：接收四个原始列表，返回一个拼接好的大字符串
+        主入口：整合所有证据
+        kg_data: dict (Knowledge Graph)
+        bio_data: list (PubMed 文献)
+        omic_data: list (可选)
+        hcc_data: list (可选)
         """
-        # 1. 格式化 HCC 数据
-        hcc_str = self._format_text_data(hcc_data, source_name="HCC Clinical Literature")
-        
-        # 2. 格式化 Bio 数据
-        bio_str = self._format_text_data(bio_data, source_name="PubMed General Literature")
-        
-        # 3. 格式化 Omic 数据
-        omic_str = self._format_omic_data(omic_data)
-        
-        # 4. 格式化 KG 数据 (保持原样)
+        evidence_sections = []
+
+        # KG 数据
         kg_str = self._format_kg_data(kg_data)
+        evidence_sections.append(kg_str)
 
-        # 5. 拼接所有内容
-        # 这个最终的 full_evidence 就是要喂给 Coder 的 Prompt 的内容
-        full_evidence = (
-            f"{kg_str}\n\n"
-            f"{omic_str}\n\n"
-            f"{hcc_str}\n\n"
-            f"{bio_str}"
-        )
-        
+        # Bio 数据
+        bio_str = self._format_text_data(bio_data, source_name="PubMed Literature")
+        evidence_sections.append(bio_str)
+
+        # Omic 数据
+        if omic_data:
+            omic_str = self._format_omic_data(omic_data)
+            evidence_sections.append(omic_str)
+
+        # HCC 数据
+        if hcc_data:
+            hcc_str = self._format_text_data(hcc_data, source_name="HCC Clinical Literature")
+            evidence_sections.append(hcc_str)
+
+        # 拼接所有证据
+        full_evidence = "\n\n".join(evidence_sections)
         return full_evidence

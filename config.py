@@ -1,3 +1,4 @@
+# 系统配置参数
 import argparse
 
 def set_argument():
@@ -6,13 +7,14 @@ def set_argument():
     parser.add_argument('--neo4j_usr',type=str,default='neo4j')
     parser.add_argument('--neo4j_pwd',type=str,default='12345678')
     parser.add_argument('--neo4j_url',type=str,default='bolt://localhost:7687')
-    parser.add_argument('--mongo_url',type=str,default='mongodb://172.18.51.200:27017/')
+    # parser.add_argument('--mongo_url',type=str,default='mongodb://172.18.51.200:27017/')
+    parser.add_argument('--mongo_url',type=str,default='mongodb://localhost:27017/')
     parser.add_argument('--db_name',type=str,default='bio')
     parser.add_argument('--collection_name',type=str,default='pubmed')
     parser.add_argument('--api_url',type=str,default='https://api.deepseek.com')
     parser.add_argument('--api_key',type=str,default='sk-0f17b61caf3f48e99944865634bd3a1c')
     parser.add_argument('--api_url_gpt',type=str,default='https://api.gptsapi.net/v1')
-    parser.add_argument('--api_key_gpt',type=str,default='sk-fo862d690e3eb2114925ad1f12618cf6a2ac6e4f341yl2Ev')
+    parser.add_argument('--api_key_gpt',type=str,default='sk-IGQ8241037bdbeccfb18105d4774dc98ac20067097dQ3dDL')
     parser.add_argument('--fact_jsonl',type=str,default='datafile/fact_corpus_explanatory.jsonl')
     parser.add_argument('--embedding_model_zh',type=str,default='BAAI/bge-large-zh')
     parser.add_argument('--faiss_index_path_omic',type=str,default='output/faiss_index_omic.bin')
@@ -24,5 +26,8 @@ def set_argument():
     parser.add_argument('--fact_jsonl_hcc',type=str,default='D:/BitLabData/bio关键文档/facts_cache.jsonl')
     parser.add_argument('--faiss_index_path_hcc',type=str,default='output/faiss_index_hcc.bin')
     parser.add_argument('--faiss_mapping_path_hcc',type=str,default='output/faiss_mapping_hcc.json')
+    parser.add_argument('--mesh_mapping_path', type=str, default="D:/BitLabData/MeSH/mesh_mapping.json")
+    parser.add_argument('--mesh_info_path', type=str, default="D:/BitLabData/MeSH/mesh_info.json")
+    parser.add_argument('--batch_size',type=int,default=32)
     args = parser.parse_args()
     return args
