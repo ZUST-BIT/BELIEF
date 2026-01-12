@@ -7,6 +7,9 @@ results/**
 output/**
 visual_outputs/**
 hf_datasets/**
+exper_script/**
+workflow_logs/**
+kg_index_output/**
 
 *.bin
 *.index

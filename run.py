@@ -1,123 +1,198 @@
+import json
 import os
-import time
-import shutil
-from query import query as original_user_query
-from format_config import FormatType
-from agentic_tools import format_selector,generate_code, CoderAgent, CodeExecutor, GeneratorAgent, ReflectorAgent, MultimodalContext, ReasonerAgent
+from datetime import datetime
+from agentic_tools import *
+from context_manager import MultimodalContext
 from retriever import retrieve_process
-from intent_router import IntentRouter
-if __name__ == '__main__':
-    evidence_final = ""
-    retry_count = 0
+from query import query as initial_query
+
+MAX_ROUNDS = 3
+RELEVANCE_THRESHOLD = 6  # 相关性阈值
+
+def run_qa_system(user_question, context='', save_log=True):
+    """
+    运行医学问答系统
     
-    context = MultimodalContext()
-    reflector = ReflectorAgent()
-    reasoner = ReasonerAgent()
-    executor = CodeExecutor()
+    :param user_question: 用户的医学问题
+    :param context: 自带的上下文（可选）
+    :param save_log: 是否保存工作流日志
+    :return: 最终答案和工作流报告
+    """
+    # 初始化智能体
+    analyst = MuldimAnalyst()
+    evaluator = EvidenceEvaluator()
     generator = GeneratorAgent()
-    intent_router = IntentRouter()
-    
-    intent_res = intent_router.intent_router(question=original_user_query, context=original_user_query)
-    need_retrieval = intent_res.get("need_retrieval", "YES").strip().upper()
-    rewritten_query = intent_res.get("rewritten_query", original_user_query)
-    analysis = intent_res.get("analysis", "")
-    current_search_query = rewritten_query if need_retrieval == "YES" else original_user_query
-    context.add_query(current_search_query)
-    if need_retrieval == "YES":
-        print(f"\n🔍 >>> Phase 1: Entering Retrieval Loop (Query: {current_search_query})...")
-        MAX_RETRIES = 2 # 最大重试次数
-        while retry_count <= MAX_RETRIES:
-            print(f"\n🔄 --- Iteration {retry_count + 1} ---")
+    context_manager = MultimodalContext()
 
-            new_evidence = retrieve_process(current_search_query)
-            context.add_evidence(new_evidence)
-            full_evidence = context.get_consolidated_text()
+    round_idx = 1
+    current_query = user_question
+    analyst_instruction = ""  # 给分析模块的额外指令
+    final_answer = None
 
-            evaluation = reflector.evaluate(original_user_query, full_evidence)
-            status = evaluation.get("status", "pass")
-            feedback = evaluation.get("feedback", "")
-            next_query = evaluation.get("new_query", "")
-
-            if status == "pass":
-                print(">>> Evidence is sufficient to answer the question.")
-                break
-            else:
-                if retry_count < MAX_RETRIES and next_query:
-                    if next_query in context.query_history:
-                        print(">>> New query has already been searched. Stopping to avoid loops.")
-                        break
-                    print(f">>> Preparing next hop with query: '{next_query}'")
-                    current_search_query = next_query
-                    context.add_query(current_search_query)
-                    retry_count += 1
-                else:
-                    print("⚠️ Max retries reached or no new query generated. Proceeding with what we have.")
-                    break
-    else:
-        print("\n🚫 >>> Phase 1: Retrieval Skipped (Context Self-Contained).")
-        context.add_evidence("No external retrieval performed (Intent Router decision).")
-    
-    # Phase 2: 推理 (Reasoner)
-    raw_retrieved_evidence = context.get_consolidated_text()
-    print(">>> Reasoner is analyzing connections in the evidence...")
-    try:
-        insights = reasoner.analyze(original_user_query, original_user_query, raw_retrieved_evidence)
-        context.add_reasoning(insights)
-    except Exception as e:
-        print(f">>> Reasoner failed to analyze the evidence: {e}")
-    
-    # 获取包含推理内容的完整证据
-    full_evidence_with_insights = context.get_consolidated_text()
-
-    # Phase 3: 可视化 (Visualization)
-    decision = format_selector(original_user_query, full_evidence_with_insights)
-    selected_fmt = decision.get("selected_format", FormatType.TEXT.value)
-    reasoning = decision.get("reasoning", "")
-    
-    print(f">>> Decison: [{selected_fmt.upper()}] because {reasoning}")
-    
-    final_image_path = None
-    
-    if selected_fmt in [FormatType.CHART.value, FormatType.GRAPH.value]:
-        print(f">>> Format '{selected_fmt}' requires visualization . Invoke coder...")
-        try:
-            generated_code = generate_code(selected_fmt, full_evidence_with_insights)
-            temp_output_file = executor.execute(generated_code)
+    while round_idx <= MAX_ROUNDS:
+        # print(f"\n=== 🌀 Round {round_idx} ===")
+        
+        # 0. 开始新一轮
+        context_manager.start_round(round_idx, current_query)
+        
+        # 1. 检索
+        retrieved_evidences = retrieve_process(current_query)
+        
+        # 1.1 第一轮时，如果用户提供了额外上下文，将其作为证据加入
+        if round_idx == 1 and context:
+            user_context_evidence = {
+                "source_type": "User Provided Context",
+                "content": context,
+                "metadata": {"source": "user_input"}
+            }
+            retrieved_evidences.insert(0, user_context_evidence)  # 插入到最前面优先分析
+        
+        # print(f"📥 Retrieved {len(retrieved_evidences)} evidence blocks.")
+        
+        # 2. 逐条分析
+        valid_count = 0
+        for ev in retrieved_evidences:
+            analyst_result = analyst.analyze_single(
+                user_question,  # 始终使用原始问题进行分析
+                ev,
+                analyst_instruction
+            )
+            if analyst_result:
+                score = analyst_result.get('relevance_score', 0)
+                decision = analyst_result.get('decision', 'DISCARD')
+                
+                # 只保留高相关性且 KEEP 的证据
+                if score >= RELEVANCE_THRESHOLD and decision == 'KEEP':
+                    source_type = ev.get("source_type", "Unknown")
+                    context_manager.add_analyst_result(analyst_result, source_type)
+                    valid_count += 1
+        
+        # print(f"✅ Valid evidences after analysis: {valid_count}")
+        
+        # 3. 全局评估
+        evaluation_data = context_manager.evidence_pool
+        evaluation_result = evaluator.evaluate_global(
+            user_question,  # 始终使用原始问题进行评估
+            evaluation_data
+        )
+        
+        # 4. 结束当前轮次，记录评估结果
+        context_manager.end_round(evaluation_result)
+        
+        # 5. 决策处理
+        status = evaluation_result.get("final_decision", "NO-GO")
+        ds_analysis = evaluation_result.get("ds_analysis", {})
+        
+        # print(f"📊 Evaluation: {status}")
+        # print(f"   - Belief Score: {ds_analysis.get('belief_score', 0):.2f}")
+        # print(f"   - Uncertainty Gap: {ds_analysis.get('uncertainty_gap', 1.0):.2f}")
+        # print(f"   - Conflict Detected: {ds_analysis.get('conflict_detected', False)}")
+        
+        if status == "GO":
+            # 证据充足，生成最终答案
+            print("\n🎯 Evidence sufficient, generating final answer...")
+            evidence_text = context_manager.get_generator_input()
+            print(f"\n🧾 Evidence provided to Generator:\n{evidence_text}\n")
+            final_answer = generator.generate_answer(
+                user_question,
+                evidence_text
+            )
+            break
+        else:
+            # 证据不足，准备下一轮检索
+            refinement = evaluation_result.get("refinement_strategy", {})
+            next_queries = refinement.get("next_search_queries", [])
+            feedback = refinement.get("feedback_to_analysis_agent", "")
+            missing = refinement.get("missing_information", "")
             
-            if temp_output_file and os.path.exists(temp_output_file):
-                save_dir = os.path.join(os.getcwd(), "visual_outputs")
-                if not os.path.exists(save_dir):
-                    os.makedirs(save_dir)
-                timestamp = time.strftime("%Y%m%d_%H%M%S")
-                new_filename = f"viz_{timestamp}.png"
-                target_path = os.path.join(save_dir, new_filename)
-                try:
-                    shutil.move(temp_output_file, target_path)
-                    print(f">>> Visualization saved to {target_path}")
-                    final_image_path = target_path
-                    context.add_image(target_path)
-                except Exception as e:
-                    print(f">>> Failed to save visualization to {target_path}: {e}")
+            print(f"\n🔄 Need more evidence:")
+            print(f"   - Missing: {missing}")
+            print(f"   - Next Queries: {next_queries}")
+            
+            # 更新下一轮的查询和指令
+            if next_queries:
+                current_query = next_queries[0]  # 使用第一个推荐查询
             else:
-                print(">>> Failed to generate visualization")
-        except Exception as e:
-            print(f">>> Failed to generate visualization: {e}")
-    elif selected_fmt == FormatType.TEXT.value:
-        print(">>> Selected format is TEXT. No visualization needed.")
-    else:
-        print(f">>> Unsupported format: {selected_fmt}")
+                current_query = user_question  # 回退到原始问题
+            
+            if feedback:
+                analyst_instruction = feedback
+            
+            round_idx += 1
     
-    print(">>> Process completed.")
+    # 如果达到最大轮次仍未 GO，强制生成答案
+    if final_answer is None:
+        print("\n⚠️ Max rounds reached, forcing answer generation...")
+        evidence_text = context_manager.get_generator_input()
+        if evidence_text and evidence_text != "暂无相关证据。":
+            final_answer = generator.generate_answer(
+                user_question,
+                evidence_text
+            )
+        else:
+            final_answer = "抱歉，未能找到足够的证据来回答您的问题。请尝试重新描述问题或提供更多背景信息。"
+    
+    # 输出可解释性报告
+    report = context_manager.get_explainability_report()
+    print(f"\n{report}")
+    
+    # 保存工作流日志
+    if save_log:
+        _save_workflow_log(context_manager, user_question, final_answer)
+    
 
-    # Phase 4: 生成最终回答 (Generator)
-    print(">>> Generating final answer...")
-    final_answer = generator.generate_answer(
-        query=original_user_query,
-        evidence_text=full_evidence_with_insights[:10000], # 传入包含 Reasoning 的证据
-        image_path=final_image_path
-    )
-    print("\n" + "=" * 50)
-    print("🤖 MEDAR-QA Final Answer:")
-    print("=" * 50)
-    print(final_answer)
-    print("=" * 50)
+    return final_answer
+    # return {
+    #     "answer": final_answer,
+    #     "evidence_pool": context_manager.evidence_pool,
+    #     "workflow_log": context_manager.export_workflow_log()
+    # }
+
+
+def _save_workflow_log(context_manager, question, answer):
+    """
+    保存工作流日志到文件
+    
+    :param context_manager: 上下文管理器
+    :param question: 用户问题
+    :param answer: 最终答案
+    """
+    log_dir = "workflow_logs"
+    os.makedirs(log_dir, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # 保存 JSON 格式
+    json_log = {
+        "timestamp": timestamp,
+        "question": question,
+        "answer": answer,
+        **context_manager.export_workflow_log()
+    }
+    json_path = os.path.join(log_dir, f"workflow_log_{timestamp}.json")
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(json_log, f, ensure_ascii=False, indent=2)
+    
+    # 保存可读性报告
+    txt_path = os.path.join(log_dir, f"workflow_log_{timestamp}.txt")
+    with open(txt_path, 'w', encoding='utf-8') as f:
+        f.write(f"Question: {question}\n")
+        f.write(f"{'='*50}\n")
+        f.write(context_manager.get_explainability_report())
+        f.write(f"\n{'='*50}\n")
+        f.write(f"Final Answer:\n{answer}\n")
+    
+    # print(f"\n📁 Workflow log saved: {json_path}")
+
+
+# --- 主程序入口 ---
+if __name__ == '__main__':
+    question = initial_query
+    context = ""
+    result = run_qa_system(question, context)
+    
+    print("\n" + "="*60)
+    print("🎯 Final Answer:")
+    print("="*60)
+    print(type(result))
+    print(result)
