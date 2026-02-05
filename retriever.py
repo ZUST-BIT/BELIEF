@@ -1,36 +1,71 @@
 # retriever.py
 import json
-from intent_router import IntentRouter
+from typing import Dict, Any, List
 from neo4j import Neo4jManager
 from pubmed import bio_pubmed_data
 from utils.data_refiner import EvidenceRefiner
-from utils.entity_linker import EntityRetriever # 导入刚才写好的类
+from utils.entity_linker import get_entity_retriever_instance
 
-def retrieve_process(current_search_query):
+def retrieve_process(
+    current_search_query: str, 
+    agent_a_result: Dict[str, Any]
+) -> List[Dict[str, Any]]:
     """
-    基于 IntentRouter 的检索计划执行 RAG 流程 (Hybrid Search)
+    基于智能体A的分析结果执行 RAG 流程 (Hybrid Search)
+    
+    Args:
+        current_search_query: 用户的原始问题
+        agent_a_result: 智能体A的分析结果，包含实体列表、问题类型等信息
+    
+    Returns:
+        检索到的证据列表
     """
-    # 1. 初始化模块
-    intent_router = IntentRouter()
+    # 1. 初始化模块（使用单例模式，避免重复加载模型）
     neo4j_manager = Neo4jManager()
     bio_pubmed = bio_pubmed_data()
     refiner = EvidenceRefiner()
-    entity_linker = EntityRetriever()
+    entity_linker = get_entity_retriever_instance()
     
-    # 2. 获取检索计划 (Intent & Plan)
-    plan_result = intent_router.intent_router(current_search_query)
     final_evidence_list = []
-    
     entities_to_align = []
     
-    # 提取问题中的实体 normalized 名称
-    if "question_entities" in plan_result:
-        for ent in plan_result["question_entities"]:
-            # if ent.get("normalized"):
-            entities_to_align.append(ent)
-
-    # 去重
-    entities_to_align = list(set(entities_to_align))
+    # 2. 从智能体A的结果中提取实体
+    # print("📌 使用智能体A的分析结果进行检索")
+    
+    # 智能体A可能返回的实体字段名称
+    entity_keys = ['biomedical_entities', 'entities', 'key_entities', 'extracted_entities']
+    
+    for key in entity_keys:
+        if key in agent_a_result:
+            entities = agent_a_result[key]
+            if isinstance(entities, list):
+                entities_to_align.extend(entities)
+            elif isinstance(entities, dict):
+                # 如果实体是字典格式，提取值
+                for entity_list in entities.values():
+                    if isinstance(entity_list, list):
+                        entities_to_align.extend(entity_list)
+            break
+    
+    # 如果智能体A提取了PICO元素，也加入检索
+    if 'pico' in agent_a_result:
+        pico = agent_a_result['pico']
+        for element in ['P', 'I', 'C', 'O']:
+            if element in pico and pico[element]:
+                value = pico[element]
+                if isinstance(value, str) and value not in ["null", "N/A", ""]:
+                    entities_to_align.append(value)
+                elif isinstance(value, list):
+                    entities_to_align.extend(value)
+    
+    # print(f"   从智能体A提取到 {len(entities_to_align)} 个实体/概念")
+    
+    # 去重和清洗
+    entities_to_align = list(set([
+        e.strip() if isinstance(e, str) else str(e) 
+        for e in entities_to_align 
+        if e and str(e).strip() and str(e).strip() not in ["null", "N/A", ""]
+    ]))
     # 1.2 执行混合检索对齐 (Dictionary + Vector)
     alignment_results = entity_linker.search_list(entities_to_align)
     # 1.3 处理对齐结果
@@ -89,22 +124,28 @@ def retrieve_process(current_search_query):
     else:
         print("🕸️ [KG Search] No valid entity IDs found, skipping KG search.")
 
-
-    base_query = plan_result.get("rewritten_query", current_search_query)
+    # 3. PubMed 文献检索
+    # print("\n📚 [PubMed Search] 检索相关文献...")
+    
+    # 构建检索查询（使用原始问题 + 扩展词）
+    base_query = current_search_query
     
     # 简单去重并拼接扩展词
     unique_expansion = list(set(expansion_terms))
     filtered_expansion = [t for t in unique_expansion if t.lower() not in base_query.lower()]
     
     final_vector_query = f"{base_query} {' '.join(filtered_expansion[:5])}".strip()
+    # print(f"   检索查询: {final_vector_query}")
     
-    # 3.2 执行检索
+    # 执行检索
     bio_data_list = bio_pubmed.search_bio_faiss(
-        vector_query=base_query,
+        vector_query=final_vector_query,
         original_query=current_search_query
     )
-    # 3.3 保存文献证据
+    
+    # 保存文献证据
     if bio_data_list:
+        # print(f"   检索到 {len(bio_data_list)} 篇文献")
         for paper in bio_data_list:
             formatted_paper_str = refiner.format_single_paper(paper)
             if formatted_paper_str:
@@ -118,4 +159,8 @@ def retrieve_process(current_search_query):
                     "content": formatted_paper_str,
                     "metadata": meta
                 })
+    else:
+        print("   未检索到相关文献")
+    
+    # print(f"\n✅ 检索完成，共获得 {len(final_evidence_list)} 个证据片段")
     return final_evidence_list

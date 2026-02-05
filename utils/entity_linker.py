@@ -11,6 +11,22 @@ from transformers import AutoTokenizer, AutoModel
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUTPUT_DIR = os.path.join(BASE_DIR, "kg_index_output")
 
+# ==================== 单例模式 ====================
+_entity_retriever_instance = None
+
+def get_entity_retriever_instance():
+    """
+    获取 EntityRetriever 单例实例
+    避免重复加载 SapBERT 模型，提高运行效率
+    """
+    global _entity_retriever_instance
+    if _entity_retriever_instance is None:
+        print("🔄 [Entity Linker] 首次初始化，加载 SapBERT 模型...")
+        _entity_retriever_instance = EntityRetriever()
+        print("✅ [Entity Linker] 模型加载完成，后续调用将复用此实例")
+    return _entity_retriever_instance
+# ================================================
+
 class EntityRetriever:
     def __init__(self):
         self.dict_path = os.path.join(OUTPUT_DIR, "keyword_mapping.json")

@@ -10,10 +10,27 @@ from bson.objectid import ObjectId
 from transformers import AutoTokenizer, AutoModel
 from sentence_transformers import CrossEncoder 
 
+# ==================== 单例模式 ====================
+_bio_faiss_instance = None
+
+def get_bio_faiss_instance(args):
+    """
+    获取 BioPubmedFaissUtils 单例实例
+    避免重复加载模型，提高运行效率
+    """
+    global _bio_faiss_instance
+    if _bio_faiss_instance is None:
+        print("🔄 [Bio FAISS] 首次初始化，加载模型...")
+        _bio_faiss_instance = BioPubmedFaissUtils(args)
+        print("✅ [Bio FAISS] 模型加载完成，后续调用将复用此实例")
+    return _bio_faiss_instance
+# ================================================
+
 class BioPubmedFaissUtils:
     def __init__(self, args):
         self.args = args
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # 强制使用CPU进行Embedding（避免与vLLM争夺显存）
+        self.device = "cpu"
         self.index_path = args.faiss_index_path_bio
         self.mapping_path = args.faiss_mapping_path_bio
         
@@ -23,6 +40,7 @@ class BioPubmedFaissUtils:
             self.model = AutoModel.from_pretrained(args.embedding_model_en)
             self.model.to(self.device)
             self.model.eval()
+            print(f"✅ Embedding模型已加载到 {self.device}（避免与vLLM争夺显存）")
         except Exception as e:
             print(f"❌ Embedding 模型加载失败: {e}")
             exit(1)

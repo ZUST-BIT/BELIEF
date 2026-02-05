@@ -14,10 +14,12 @@ class HccPubmedFaissUtils:
         self.tokenizer = AutoTokenizer.from_pretrained(args.embedding_model_en)
         self.model = AutoModel.from_pretrained(args.embedding_model_en)
 
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # 强制使用CPU进行Embedding（避免与vLLM争夺显存）
+        self.device = "cpu"
         # print(f"[INFO] 运行设备: {self.device}")
         self.model.to(self.device)
         self.model.eval()
+        print(f"✅ Embedding模型已加载到 {self.device}（避免与vLLM争夺显存）")
 
     @torch.no_grad()
     def embed(self, text):
