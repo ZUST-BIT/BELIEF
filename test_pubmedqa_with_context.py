@@ -15,7 +15,7 @@ from llm_client import get_llm_client
 # ==================== 配置参数 ====================
 DATA_PATH = "data/pubmedqa_sample.json"  # PubMedQA数据集路径
 OUTPUT_DIR = "TEST_RESULTS/pubmedqa"               # 结果输出目录
-TEST_LIMIT = 5                           # 测试数量，None表示全部测试
+TEST_LIMIT = None                          # 测试数量，None表示全部测试
 SAVE_INTERVAL = 1000                         # 保存间隔
 # ================================================
 
@@ -96,7 +96,7 @@ class PubMedQABaselineWithContext:
         
         try:
             # 调用LLM
-            response = self.llm.chat(prompt, temperature=0.1, max_tokens=50000)
+            response = self.llm.chat(prompt, temperature=0.1, max_tokens=50)
             # print(f"PMID {pmid} 的模型响应是：{response}")
             predicted = self.normalize_decision(response)
             is_correct = (predicted == self.normalize_decision(ground_truth))

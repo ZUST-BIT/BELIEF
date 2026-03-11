@@ -21,7 +21,7 @@ class Neo4jManager:
             print(f"❌ Schema Error: {e}")
             return None
 
-    def query_one_hop_relations_by_id(self, node_id, limit=50):
+    def query_one_hop_relations_by_id(self, node_id, limit=3):
         """
         [单跳查询] 基于 ID 查邻居
         返回格式: "StartName -[Type]-> NeighborName"

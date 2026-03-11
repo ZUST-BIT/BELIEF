@@ -1,66 +1,3 @@
-# Prompt_A = """
-# Role:
-# You are a senior biomedical methodology consultant designing
-# a downstream evidence-based reasoning pipeline.
-
-# Task:
-# Analyze the user's biomedical question and output a structured JSON
-# configuration for a Dempster–Shafer based analysis system.
-
-# Instructions:
-# 1. Classify the question into ONE of the following types:
-#    - TYPE_I_FACTOID
-#    - TYPE_II_BINARY
-#    - TYPE_III_COMPARATIVE
-#    - TYPE_IV_DIAGNOSTIC
-
-# 2. Select the corresponding analysis mode:
-#    - TYPE_I_FACTOID → FACT_CONSISTENCY
-#    - TYPE_II_BINARY → BINARY_DS
-#    - TYPE_III_COMPARATIVE → CONFLICT_RESOLUTION
-#    - TYPE_IV_DIAGNOSTIC → ABDUCTIVE_DIAGNOSIS
-
-# 3. Define a Frame of Discernment (FoD):
-#    - Binary: ["YES", "NO", "UNCERTAIN"]
-#    - Comparative: ["FAVOR_A", "FAVOR_B", "EQUIVALENT", "UNCERTAIN"]
-#    - Diagnostic: Top-3 likely diagnoses + ["OTHER"]
-#    - Factoid: ["MATCH", "MISMATCH"]
-
-# 4. Extract PICO elements if applicable.
-
-# 5. Extract key biomedical entities for retrieval.
-
-# Constraints:
-# - Limit FoD size to a maximum of 4 elements.
-# - Think step by step internally.
-# - Output ONLY valid JSON.
-# - Do NOT include explanations.
-
-# Output Format (JSON ONLY):
-# {
-#   "question_type": "TYPE_IV_DIAGNOSTIC",
-#   "analysis_mode": "ABDUCTIVE_DIAGNOSIS",
-#   "frame_of_discernment": [
-#     "IL-2","IL-10","IL-13","IL-4"
-#   ],
-#   "pico_elements": {
-#     "P": "7-year-old boy with asthma",
-#     "I": "experimental therapy",
-#     "C": "reduction of mediator activity",
-#     "O": "exacerbation of asthmatic symptoms"
-#   },
-#   "entities": {
-#     "biomedical": [
-#       "asthma","β-agonist inhaler","exacerbation","pollen","IL-2","IL-10","IL-13","IL-4"
-#     ]
-#   }
-# }
-
-# User Question:
-# {{QUESTION}}
-
-# """
-
 Prompt_A = """
 ### Role
 You are a Lead Biomedical Methodology Consultant. Your specialty is translating unstructured clinical questions into structured configurations for a Dempster-Shafer (D-S) evidence reasoning system.
@@ -80,8 +17,9 @@ Analyze the User Question (and optional Options) to output a structured JSON con
 
 2.  **Step 2: Classify Question Type (The Taxonomy)**
     * **TYPE_I_FACTOID**: Asks for a specific value, number, or simple fact. (e.g., "Half-life of Ibuprofen?") -> FoD: ["MATCH", "MISMATCH"]
-    * **TYPE_II_BINARY**: Asks "Does A cause B?", "Is A effective?", "Yes/No" questions. -> FoD: ["SUPPORT", "REFUTE"]
-    * **TYPE_III_COMPARATIVE**: Asks "Is A better than B?", comparing two specific interventions. -> FoD: ["FAVOR_A", "FAVOR_B", "EQUIVALENT"]
+    * **TYPE_II_BINARY**: Asks "Does A cause B?", "Is A effective?", "Yes/No" questions, OR asks "Is X a reliable marker/predictor/indicator?" (validating a single tool/score without an explicit comparator). -> FoD: ["SUPPORT", "REFUTE"]
+      * **⚠️ KEY DISAMBIGUATION**: If the question asks whether a SINGLE method, tool, or score is valid/reliable/effective — even if the question mentions what the tool is used for — this is TYPE_II_BINARY, NOT TYPE_III_COMPARATIVE. TYPE_III requires an EXPLICIT comparator ("Is A better than B?").
+    * **TYPE_III_COMPARATIVE**: Asks "Is A better than B?", comparing two specific NAMED interventions or approaches against each other. -> FoD: ["FAVOR_A", "FAVOR_B", "EQUIVALENT"]
     * **TYPE_IV_DIAGNOSTIC_OR_SELECTION**:
         * Scenario A: Clinical diagnosis ("What is the likely disease?").
         * Scenario B: Multiple Choice Questions (MCQ) asking to select the correct mechanism/drug/gene from a list.
@@ -117,12 +55,25 @@ Analyze the User Question (and optional Options) to output a structured JSON con
 *Input*: "For T2DM patients, does Metformin have better cardiovascular outcomes than Insulin?"
 *Output*:
 {
-  "reasoning_trace": "Question compares Drug A (Metformin) vs Drug B (Insulin).",
+  "reasoning_trace": "Question compares Drug A (Metformin) vs Drug B (Insulin). Both are explicitly named as competing options.",
   "question_type": "TYPE_III_COMPARATIVE",
   "analysis_mode": "CONFLICT_RESOLUTION",
   "frame_of_discernment": ["FAVOR_METFORMIN", "FAVOR_INSULIN", "EQUIVALENT"],
   "pico_elements": {"P": "T2DM patients", "I": "Metformin", "C": "Insulin", "O": "Cardiovascular outcomes"},
   "entities": {"biomedical": ["Type 2 Diabetes", "Metformin", "Insulin", "Cardiovascular Diseases"]}
+}
+
+**Example 2b: Single-Tool Validation (Type II, NOT Type III) — COMMON TRAP**
+*Input*: "Is the APACHE II score a reliable marker of physiological impairment in emergency surgical patients?"
+*WRONG*: Classifying this as TYPE_III_COMPARATIVE with FoD ["FAVOR_APACHE_II", "FAVOR_OTHER_MARKERS", "EQUIVALENT"] — because no comparator is named.
+*Output*:
+{
+  "reasoning_trace": "Question asks whether a single scoring tool (APACHE II) is reliable. No explicit comparator is given. This is a validation/yes-no question, not a head-to-head comparison.",
+  "question_type": "TYPE_II_BINARY",
+  "analysis_mode": "BINARY_DS",
+  "frame_of_discernment": ["SUPPORT", "REFUTE"],
+  "pico_elements": {"P": "Emergency surgical patients", "I": "APACHE II score", "O": "Physiological impairment / risk stratification"},
+  "entities": {"biomedical": ["APACHE II", "Physiological impairment", "Emergency surgery", "Risk stratification"]}
 }
 
 **Example 3: MCQ/Selection (Type IV) - ***PAY ATTENTION HERE****
@@ -144,49 +95,6 @@ Options: {"A": "IL-2", "B": "IL-4", "C": "IFN-gamma"}
 - Do not add markdown code blocks (```json) if not requested, just raw JSON.
 - Limit FoD size to 4-5 elements max.
 """
-
-# Prompt_B = """
-# 角色（Role）：
-# 你是一名接受过循证医学（EBM）训练的生物医学证据分析员，
-# 负责将非结构化医学文本转换为可用于证据推理的结构化信息。
-
-# 任务（Task）：
-# 给定一段生物医学文献摘要或知识片段，请完成以下工作：
-# 1. 提取 PICO 结构化信息；
-# 2. 判断该研究的研究设计类型（用于证据分级）；
-# 3. 仅基于文本本身，不进行任何推断或补全。
-
-# 分析要求（Instructions）：
-# 1. PICO 提取规则：
-#    - 仅在文本中“明确出现”时才填写；
-#    - 如果某一元素缺失或不清楚，必须输出 null；
-#    - 不要根据常识或背景知识进行推断。
-
-# 2. 研究设计识别规则：
-#    - 仅根据明确的描述或关键词判断；
-#    - 若存在不确定性，选择“更保守”的研究类型；
-#    - 若完全无法判断，标记为 "Unclear"。
-
-# 3. 禁止行为：
-#    - 不要总结全文；
-#    - 不要解释原因；
-#    - 不要输出与任务无关的内容。
-
-# 输出格式（JSON ONLY）：
-# {
-#   "pico": {
-#     "P": "",
-#     "I": "",
-#     "C": null,
-#     "O": ""
-#   },
-#   "study_type": "",
-#   "study_type_confidence": 0.0
-# }
-
-# 输入文本：
-# {{EVIDENCE_TEXT}}
-# """
 
 Prompt_B = """
 Role:
@@ -255,519 +163,94 @@ Input Text:
 {{EVIDENCE_TEXT}}
 """
 
-# Prompt_C = """
-# 角色（Role）：
-# 你是一名资深的生物医学证据评估专家。你不仅精通文本分析，还具备深厚的病理生理学、药理学和细胞生物学知识储备。
+Prompt_C_Optimized = """
+You are a medical evidence classifier. Classify the evidence below using the 4-step checklist. Output JSON only.
 
-# 任务（Task）：
-# 给定一个假设命题（Hypothesis）和一段证据文本（Evidence），你需要：
-# 1. 调用你的内部医学知识库，分析证据中的核心实体（如药物、基因、通路）与假设之间的生物学关联。
-# 2. 判断证据对假设的逻辑支持关系。
-# 3. 评估证据可靠性并识别语言不确定性。
-
-# 分析要求（Instructions）：
-
-# 1. 隐含逻辑与背景知识推理（CRITICAL）：
-#    - 如果证据提到某种“干预手段”（如药物 Cyclosporine A、基因敲除），请务必分析其**作用机理（Mechanism of Action）**或**靶点**。
-#    - 示例：如果假设提及“线粒体”，而证据提及“使用 Cyclosporine A (CsA)”，由于 CsA 是线粒体通透性转换孔抑制剂，这应被视为**ENTAILMENT（蕴含）**，而非无关。
-#    - 区分“科学推导”与“无端猜测”：基于公认药理学机制的推导是允许且必须的。
-
-# 2. 自然语言推理（NLI）判断：
-#    - ENTAILMENT（蕴含）：证据（结合生物学常识）支持假设成立。
-#    - CONTRADICTION（矛盾）：证据（结合生物学常识）反驳假设。
-#    - NEUTRAL（中立）：即便结合背景知识，证据仍与假设无关。
-   
-#    输出三个概率值（总和1.0）。
-
-# 3. 证据源可靠性评估（修正版）：
-#    - 基础分值：
-#      * Systematic Review: 0.95 | RCT: 0.85 
-#      * Cohort: 0.70 | Case-Control: 0.60
-#      * Experimental Study: 0.80
-#      * Case Report/Series: 0.40
-   
-#    - **关键加分项（Reliability Boost）**：
-#      * 如果证据包含**确诊性生物标志物**（如：组胺升高、基因突变确诊、活检阳性）：**+0.3**
-#      * 如果证据包含**挑战/再激发试验**（Challenge/Re-challenge）阳性：**+0.2**
-#      * 注意：加分后最高不超过 0.95。
-
-# 4. 语言不确定性识别（保持原标准）：
-#    - 识别 hedge words (might, may, likely) 并适当调整可靠性。
-
-# 5. 比较类问题（Comparative Questions）的特殊处理（CRITICAL）：
-#    - 场景：用户询问 "A 和 B 有区别吗？" 或 "A 是否优于 B？"
-#    - 证据：显示 "A 和 B 效果相当"、"无统计学差异" 或 "P > 0.05"。
-#    - 判定：这属于**明确的阴性结果**，直接**反驳 (Contradict)** "存在差异" 的假设。
-#    - 操作：必须将分数主要分配给 **contradiction_score**，并将 dominant_relation 设为 **CONTRADICTION**。
-#    - **严禁**因为"没发现差异"而将其归类为 NEUTRAL (无关) 或 UNCERTAIN (不确定)。
-
-# 6. 假设预处理（Hypothesis Pre-processing）：
-#    - 注意：输入的 {{HYPOTHESIS}} 可能是一个疑问句。
-#    - 在进行 NLI 判断前，**必须**先将其在思维链中转化为**肯定陈述句**。
-#    - 示例：
-#      * 输入："A 和 B 有区别吗？" -> 视为假设："A 和 B 存在显著差异"。
-#      * 输入："线粒体起作用吗？" -> 视为假设："线粒体起作用"。
-#    - 然后基于这个转化后的肯定假设，判断证据是支持 (Entailment) 还是反驳 (Contradiction)。
-
-# 7. “必要性”与“临床意义”判定（CRITICAL UPDATE）：
-#    - 场景：用户询问“某种复杂方法/调整是否必要 (Necessary)？”
-#    - 陷阱：不要仅仅因为统计结果有变化（如 P值改变）就判断为 YES。
-#    - 判定标准：必须权衡 **获益（Magnitude of Effect）** vs **成本/复杂性**。
-#    - 负向信号：如果证据包含以下描述，应倾向于 **CONTRADICTION (NO)**：
-#      * "subtle difference" (细微差异)
-#      * "marginal improvement" (边缘改善)
-#      * "results were comparable" (结果相当)
-#      * "no clinical benefit" (无临床获益)
-#    - 逻辑：如果一种复杂方法只带来了“细微差异”，在医学上通常被视为“不必要”。
-
-# 8. 统计学陷阱识别（Statistical Nuance Check）- CRITICAL：
-#    - **单变量 vs 多变量 (Univariate vs Multivariate)**：
-#      - 如果证据显示某因素在单变量分析中显著 (p<0.05)，但在多变量分析中**不显著** (not significant)。
-#      - **判定**：这意味着该因素**不是独立预后因子**。
-#      - **操作**：
-#        1. 这属于**弱支持 (Weak Support)** 或 **中立 (Neutral)**，甚至是 **反对 (Contradiction)**（如果假设是“提供独立预后信息”）。
-#        2. **严禁**将其视为强 Entailment。
-#        3. 在 reasoning_trace 中必须指出：“虽然单变量显著，但多变量不显著，提示非独立因子，价值有限。” 
-# 9. “机会/可能性”类问题的逻辑判定（Probability vs Possibility）：
-#    - 场景：用户询问“Is there an opportunity...?”或“Is it a potential...?”
-#    - 陷阱：证据显示该现象仅在**少部分人**（如 10%-30%）中发生。
-#    - 判定：不要因为发生率低就视为 CONTRADICTION。
-#    - 正确逻辑：只要存在一个明确的亚组（Subgroup）表现出该特征，应视为 **SUPPORT (YES)** 或 **NEUTRAL**，而非反对。
-#    - 示例：
-#      * 问题："Is X an opportunity for Y?"
-#      * 证据："X happened in 17% of cases."
-#      * 判定：**ENTAILMENT (YES)**，理由是"Identified a subgroup (17%) where this opportunity exists."
-# 10. 因果推断警示 (Causal Inference Check) - CRITICAL：
-#    - 场景：用户询问 "Does A cause B?" 或 "Is A the effect of B?" (因果类问题)。
-#    - 证据类型：如果证据是 **Retrospective (回顾性)** 或 **Observational (观察性)** 研究。
-#    - 判定规则：
-#      * 即使数据高度相关（如 A 增加，B 也增加），也**不能**视为强支持 (Strong Entailment)。
-#      * 必须将其视为 **WEAK SUPPORT (弱支持)** 或 **NEUTRAL**。
-#      * 必须在 reasoning_trace 中注明："Observational data shows association but cannot prove causation." (观察性数据显示相关性但不能证明因果)。 
-
-# 11. 亚组获益与总体结论判定（Subgroup vs Overall Benefit）- CRITICAL：
-#    - 场景：证据显示干预措施仅在**特定亚组**（如“困难气道”、“高危患者”）中有效，而在总体人群或普通患者中无显著差异。
-#    - 判定：
-#      * 这不属于强支持（Strong Support）。
-#      * 应视为 **LIMITED SUPPORT (有限支持)** 或 **CONDITIONAL YES (有条件的是)**。
-#      * 打分时应适当降低 Support 分数（如降至 0.4-0.5），并增加 Uncertainty。
-#    - 推理链要求：必须指出“获益仅限于特定人群，总体优势不明显”。 
-       
-# 输出格式（JSON ONLY）：
-# {
-#   "reasoning_trace": "在此处简要说明推理过程，特别是如何通过背景知识连接证据与假设（例如：CsA targets mitochondria -> evidence implies mitochondria role）",
-#   "nli_analysis": {
-#     "entailment_score": 0.0,
-#     "contradiction_score": 0.0,
-#     "neutral_score": 0.0,
-#     "dominant_relation": "ENTAILMENT/CONTRADICTION/NEUTRAL"
-#   },
-#   "reliability_assessment": {
-#     "evidence_type": "识别到的具体研究类型",
-#     "base_reliability": 0.0,
-#     "hedge_words": [],
-#     "uncertainty_level": "none/low/medium/high",
-#     "adjusted_reliability": 0.0
-#   },
-#   "bpa_components": {
-#     "support_hypothesis": 0.0,
-#     "against_hypothesis": 0.0,
-#     "uncertainty": 0.0
-#   }
-# }
-
-# 假设命题（Hypothesis）：
-# {{HYPOTHESIS}}
-
-# 证据文本（Evidence）：
-# {{EVIDENCE_TEXT}}
-# """
-
-# Prompt_C = """
-# ### Role
-# 你是一个精通 D-S 证据理论 (Dempster-Shafer Theory) 的生物医学证据评估专家。你的核心能力是剥离表象，通过严谨的逻辑链判断证据是否支持假设。
-
-# ### Input Data
-# 1.  **Hypothesis (假设)**: 待验证的命题（可能是疑问句）。
-# 2.  **Evidence (证据)**: 包含原文及结构化分析（PICO/Study Design）的文本。
-
-# ### Your Thinking Protocol (思维协议)
-# 为了保证评估的准确性，你必须严格按照以下**5个步骤**进行思考。不要跳过任何一步：
-
-# #### Step 1: Hypothesis Normalization (假设归一化)
-# * **动作**: 如果输入是疑问句（如 "A有效吗？"），必须先转化为肯定陈述句（"A是有效的"）。
-# * **目标**: 确立 NLI 判断的基准靶心。
-
-# #### Step 2: Reliability Anchor (可靠性锚定)
-# * **动作**: 首先识别证据的研究设计类型 (Study Design)。
-# * **打分表 (Base Score)**:
-#     * Meta-Analysis/Systematic Review -> 0.95
-#     * RCT (随机对照试验) -> 0.85
-#     * Experimental Study (实验性研究/动物/细胞) -> 0.80
-#     * Cohort/Case-Control (观察性研究) -> 0.65
-#     * Case Report/Series (病例报告) -> 0.40
-#     * Expert Opinion/Unclear -> 0.30
-# * **调整 (Adjustment)**: 
-#     * 有"确诊金标准" (biomarkers/biopsy)? -> +0.2
-#     * 有 Hedge words (might/may/suggest)? -> -0.1 到 -0.2
-
-# #### Step 3: Statistical & Causal Vetting (陷阱排查 - CRITICAL)
-# * **检查1 (单变量陷阱)**: 证据是否只在单变量(univariate)分析显著，但多变量(multivariate)不显著？ -> 如果是，视为 **NEUTRAL** 或 **WEAK SUPPORT**，不可作为强证据。
-# * **检查2 (相关性陷阱)**: 假设问 "A导致B吗(Cause)"，但证据是回顾性/观察性研究？ -> 只能视为 **WEAK SUPPORT** (Association != Causation)。
-# * **检查3 (亚组陷阱)**: 效果是否仅存在于特定亚组(Subgroup)，而总体(Overall)无差异？ -> 视为 **LIMITED SUPPORT**，增加不确定性。
-# * **检查4 (比较陷阱)**: 假设问 "A优于B吗？"，证据显示 "No significant difference" (P>0.05)？ -> 这是 **CONTRADICTION** (反驳了"有差异"的假设)，绝不是 Neutral。
-
-# #### Step 4: Biological Linkage (生物学链路)
-# * **动作**: 检查实体是否匹配。
-# * **规则**: 如果证据未直接提及假设中的实体，但提及了其明确的**上游调节因子**或**下游靶点**（基于公认医学常识，如 Cyclosporine A -> Mitochondria），视为 **RELEVANT (相关)**。
-
-# #### Step 5: Final NLI Judgment (最终裁决)
-# * **Entailment (支持)**: 证据逻辑上通过了上述检查，且方向一致。
-# * **Contradiction (反驳)**: 证据明确否定了假设（包括"无差异"的结果）。
-# * **Neutral (中立)**: 证据讨论的主题不同，或因上述陷阱导致证据力完全失效。
-
-# ---
-
-# ### Output Format (JSON Only)
-# Strictly output JSON. Do not output markdown code blocks.
-# ```json
-# {
-#   "step_by_step_reasoning": {
-#     "normalized_hypothesis": "转化后的肯定句",
-#     "study_design_identified": "识别出的研究类型",
-#     "reliability_rationale": "为何给这个可靠性分数的简短理由",
-#     "trap_check": "是否触发了Step 3中的陷阱？如有，请说明",
-#     "logical_inference": "生物学推理过程"
-#   },
-#   "nli_analysis": {
-#     "entailment_score": 0.0 to 1.0,
-#     "contradiction_score": 0.0 to 1.0,
-#     "neutral_score": 0.0 to 1.0,
-#     "dominant_relation": "ENTAILMENT"
-#   },
-#   "reliability_assessment": {
-#     "evidence_type": "Case Series/RCT/etc",
-#     "adjusted_reliability": 0.0 to 0.95
-#   },
-#   "bpa_components": {
-#     "support_hypothesis": 0.0,
-#     "against_hypothesis": 0.0,
-#     "uncertainty": 0.0
-#   }
-# }
-# ```
-# ### Current Task
-# **Hypothesis**: {{HYPOTHESIS}}
-# **Evidence**: {{EVIDENCE_TEXT}}
-# """
-
-# Prompt_C = """
-# ### Role Definition
-# You are an expert Medical Evidence Evaluator using Dempster-Shafer Theory. 
-# Your Core Mission: Act as a **STRICT GATEKEEPER**. You must filter out high-quality but **irrelevant** evidence (noise) before assessing credibility.
-
-# ### Input Data
-# 1. **Target Hypothesis**: {{HYPOTHESIS}}
-# 2. **Question Context (Gold Standard PICO)**:
-# {{QUESTION_PICO}}
-#    *(This defines the ONLY patient population and intervention we care about.)*
-# 3. **Candidate Evidence**: 
-# {{EVIDENCE_TEXT}}
-
-# ### Thinking Protocol (Execute Sequentially)
-
-# #### Step 1: The Relevance Gate (Crucial PICO Match)
-# **Action**: Compare the `Question PICO` vs. the `Evidence Content`.
-# * **Check Population (P)**: Does the evidence study the EXACT same disease/condition?
-#     * *Example Trap*: Question is "Hirschsprung Disease" vs. Evidence is "Rectal Cancer". -> **MISMATCH**.
-# * **Check Intervention (I)**: Does the evidence study the EXACT same procedure?
-#     * *Example Trap*: Question is "Pull-through" vs. Evidence is "Local Excision". -> **MISMATCH**.
-# * **Decision Rule**:
-#     * **MATCH**: P and I align perfectly. -> Proceed to Step 2.
-#     * **PARTIAL**: Related but not exact (e.g., broad review). -> Proceed with Caution.
-#     * **MISMATCH**: Different disease or different surgery. -> **STOP**. Mark as Irrelevant.
-
-# #### Step 2: Quality Assessment (Reliability Anchor)
-# *Assess reliability ONLY based on Study Design, then apply the "Relevance Penalty" from Step 1.*
-# * **Base Score (If MATCH)**:
-#     * Meta-Analysis/Systematic Review: 0.95
-#     * RCT: 0.85
-#     * Cohort/Case-Control: 0.65
-#     * Case Series: 0.40
-#     * Expert Opinion/Unclear: 0.30
-# * **Relevance Penalty (The Filter)**:
-#     * **IF Step 1 was MISMATCH**: You MUST override the Base Score. **Force Reliability to < 0.10**. (A high-quality paper on the wrong topic is useless).
-#     * **IF Step 1 was PARTIAL**: Multiply Base Score by 0.5.
-
-# #### Step 3: Statistical Trap Check
-# * Check for: Univariate-only significance? Correlation vs Causation? 
-# * If traps exist, reduce Reliability by 0.2.
-
-# #### Step 4: Final NLI Judgment
-# * **Entailment**: Evidence is RELEVANT (Match) AND supports the hypothesis.
-# * **Contradiction**: Evidence is RELEVANT (Match) AND refutes the hypothesis.
-# * **Neutral**: Evidence is **IRRELEVANT** (Mismatch), or inconclusive.
-
-# ---
-
-# ### Output Format (Strict JSON)
-# ```json
-# {
-#   "step_by_step_reasoning": {
-#     "pico_analysis": "Explicitly compare Question P vs Evidence P, and Question I vs Evidence I. State if it is a MATCH or MISMATCH.",
-#     "study_design_identified": "e.g., Meta-Analysis, Cohort",
-#     "reliability_rationale": "Explain the score. IF MISMATCH, state 'Penalized due to irrelevance'.",
-#     "trap_check": "Traps found or None",
-#     "logical_inference": "Clinical reasoning summary"
-#   },
-#   "nli_analysis": {
-#     "entailment_score": 0.0 to 1.0,
-#     "contradiction_score": 0.0 to 1.0,
-#     "neutral_score": 0.0 to 1.0,
-#     "dominant_relation": "ENTAILMENT, CONTRADICTION, or NEUTRAL"
-#   },
-#   "reliability_assessment": {
-#     "evidence_type": "Identified Type",
-#     "adjusted_reliability": 0.0 to 0.95 (Must reflect Relevance Penalty!)
-#   },
-#   "bpa_components": {
-#     "support_hypothesis": 0.0,
-#     "against_hypothesis": 0.0,
-#     "uncertainty": 0.0
-#   }
-# }
-# """
-
-Prompt_C = """
-### Role Definition
-You are an expert Medical Evidence Evaluator. Your goal is to determine if the provided evidence supports the hypothesis, strictly following EBM principles.
-
-### Input Data
-1. **Target Hypothesis**: {{HYPOTHESIS}}
-2. **Question Context (PICO Target)**:
-{{QUESTION_PICO}}
-3. **Candidate Evidence**: 
-{{EVIDENCE_TEXT}}
-
-### Analysis Protocol (Strict Execution Order)
-
-#### Step 0: Source Privilege Check (The "Gold Standard" Rule)
-* **Action**: Check the `[Source Type]` or metadata of the evidence.
-* **Rule**: 
-    * **IF** the source is marked as **"user_context"**, "**user_provided**", or "**Abstract Context**":
-        * This is **GOLD STANDARD** information provided by the user.
-        * **SKIP Step 1 (Relevance Gate)**. Consider it inherently RELEVANT.
-        * **FORCE Base Reliability = 1.0**.
-        * Proceed directly to Step 3 and 4.
-    * **ELSE**: Proceed to Step 1.
-
-#### Step 1: Semantic Relevance Gate (The Filter)
-* **Action**: Compare `Question PICO` vs. `Evidence PICO`.
-* **Rule**:
-    * **Allow Clinical Equivalents**: 
-        * Abbreviations are OK (e.g., "HD" matches "Hirschsprung Disease").
-        * Synonyms are OK (e.g., "TAPP" matches "Transabdominal Preperitoneal").
-        * Subtypes are OK (e.g., "Pull-through" covers "TERPT" and "Swenson").
-    * **MATCH**: Concepts align or are clinically equivalent. -> Proceed to Step 2.
-    * **MISMATCH**: 
-        * Different Disease (e.g., Rectal Cancer vs. Hirschsprung).
-        * Different Organ (e.g., Heart vs. Colon).
-        * -> **STOP**. Mark as IRRELEVANT (Reliability < 0.1).
-
-#### Step 2: Quality Assessment (For External Evidence Only)
-*Assess reliability based on Study Design:*
-* Meta-Analysis/Systematic Review: 0.95
-* RCT: 0.85
-* Cohort/Case-Control: 0.65
-* Case Series/Report: 0.40
-* Unclear/Basic Science: 0.30
-
-#### Step 3: Statistical Trap Check
-* Check for: Univariate-only significance? Subgroup-only effects?
-* If traps exist, reduce Reliability by 0.2.
-
-#### Step 4: Final NLI Judgment
-* **Entailment**: Evidence supports the hypothesis (e.g., "A is better than B", "A equals B").
-* **Contradiction**: Evidence refutes the hypothesis.
-* **Neutral**: Evidence is inconclusive or irrelevant.
+**Research Question:** {{HYPOTHESIS}}
+**Question PICO:** {{QUESTION_PICO}}
+**Evidence:** {{EVIDENCE_TEXT}}
 
 ---
+## STEP 1 — SOURCE PRIVILEGE
+Look at the `[Source Type]` field in the evidence.
+- `user_context` / `user_provided` / `Abstract Context` → **GOLD_STANDARD**
+- Everything else → **EXTERNAL_LITERATURE**
 
-### Output Format (JSON Only)
+## STEP 2 — RELEVANCE
+Compare Question PICO vs Evidence PICO.
+- Population AND (Intervention OR Outcome) both match → **HIGHLY_RELEVANT**
+- Only ONE element matches → **PARTIALLY_RELEVANT**
+- Completely different topic → **IRRELEVANT** (set Steps 3-4 to N/A, direction to NEUTRAL, stop here)
+
+> Cadaveric/ex-vivo/surrogate models studying the exact same Intervention and Outcome as the question → **HIGHLY_RELEVANT** (model type is not a population mismatch).
+
+## STEP 3 — SOURCE QUALITY + QUALITY TRAP
+Quality (use GOLD_STANDARD if Step 1 = GOLD_STANDARD):
+`GOLD_STANDARD` | `SYSTEMATIC_REVIEW` | `RCT` | `COHORT_CASE_CONTROL` | `CASE_SERIES` | `UNCLEAR_BASIC`
+
+Trap (pick the worst, default NO_TRAP):
+`NO_TRAP` | `WEAK_SUBGROUP` | `ANIMAL_MODEL_ONLY` | `CONTRADICTORY_INTERNAL`
+> Apply `CONTRADICTORY_INTERNAL` when RESULTS contain both a significant positive AND a significant negative finding on different sub-questions.
+
+## STEP 4 — EVIDENCE DIRECTION (Most Important Step)
+
+**Rule A — Identify valid evidence sentences FIRST.**
+The evidence may have labeled sections: HYPOTHESES, DESIGN, SETTING, PATIENTS, MAIN OUTCOME MEASURES, RESULTS.
+- **ONLY sentences under the RESULTS label contain valid findings.**
+- Sentences under HYPOTHESES / BACKGROUND / OBJECTIVE describe what was being tested, NOT what was found. They have zero directional weight even if they sound like conclusions.
+- Test: Does the sentence contain a number, percentage, or p-value reporting an actual measured outcome? If YES → valid finding. If NO → research motivation, ignore for direction.
+
+**Rule B — If no valid RESULTS sentences exist → direction = NEUTRAL. Stop.**
+Do not assign SUPPORTS or REFUTES based on background text. This is a hard rule.
+
+**Rule C — If valid RESULTS sentences exist, enumerate ALL of them.**
+List every numeric result. Then for each one, decide: does it match or contradict the specific claim in the question?
+
+**Rule D — Anchor to the question's specific claim.**
+- The question title tells you which aspect matters. E.g., "risk stratification" → focus on pre-operative/pre-treatment use, not postoperative monitoring.
+- If a sub-finding is explicitly labeled as a limitation by the study itself (e.g., "ICU-admission score is not independent of treatment"), that sub-finding is a caveat on one sub-use, not a refutation of the primary question.
+- Majority rule: if more sub-findings support than refute, net direction = SUPPORTS.
+
+**Rule E — Clinical adequacy context.**
+If the question includes context like `austere environments`, `resource-limited`, `point-of-care`, the bar is clinical adequacy, not perfection. Systematic but predictable bias + good correlation + good reproducibility = SUPPORTS.
+
+**Direction labels** (replace [Option] with the exact option name from the Frame of Discernment):
+`STRONGLY_SUPPORTS_[Option]` | `WEAKLY_SUPPORTS_[Option]` | `NEUTRAL` | `WEAKLY_REFUTES_[Option]` | `STRONGLY_REFUTES_[Option]`
+
+---
+### Worked Example (APACHE II)
+Question: "Is the APACHE II score a reliable marker of physiological impairment in emergency surgical patients?"
+Frame: ["SUPPORT", "REFUTE"]
+Evidence sections labeled: HYPOTHESES / DESIGN / SETTING / PATIENTS / MAIN OUTCOME MEASURES / RESULTS
+
+- HYPOTHESES says: "score used as ICU admission score is not independent of treatment effects..." → MOTIVATION, not finding. Ignore for direction.
+- RESULTS contains three numeric findings:
+  - (a) Pre-surgery: predicted 34%, observed 32% → match → SUPPORTS SUPPORT
+  - (b) ICU-admission: predicted 50%, observed 32% (P=.02) → mismatch → SUPPORTS REFUTE
+  - (c) Day-10: survivors vs. non-survivors significantly different (P=.04) → score distinguishes outcomes → SUPPORTS SUPPORT
+- Anchor: question = "risk stratification" → primary use is pre-surgical assessment. Sub-finding (b) is about ICU-admission (a different sub-use explicitly flagged in HYPOTHESES as limited).
+- 2/3 sub-findings SUPPORT; anchor sub-finding also SUPPORTS.
+- → direction = `STRONGLY_SUPPORTS_SUPPORT`, quality_trap = `CONTRADICTORY_INTERNAL` (for sub-finding b).
+
+---
+### Output JSON
 ```json
 {
-  "step_by_step_reasoning": {
-    "source_privilege": "Was Step 0 triggered? (Yes/No)",
-    "pico_match_analysis": "Explain the Match/Mismatch (mentioning synonyms/abbreviations if used).",
-    "study_design_identified": "Design type",
-    "reliability_rationale": "Score explanation. (If User Context, state 'Gold Standard')",
-    "trap_check": "Traps found",
-    "logical_inference": "Clinical reasoning"
+  "reasoning_trace": {
+    "relevance_reasoning": "<one sentence: which PICO elements match>",
+    "source_quality_reasoning": "<study design + trap>",
+    "direction_reasoning": "<list all numeric RESULTS sentences, label each SUPPORTS/REFUTES, apply anchor, state final direction>"
   },
-  "nli_analysis": {
-    "entailment_score": 0.0 to 1.0,
-    "contradiction_score": 0.0 to 1.0,
-    "neutral_score": 0.0 to 1.0,
-    "dominant_relation": "ENTAILMENT/CONTRADICTION/NEUTRAL"
-  },
-  "reliability_assessment": {
-    "evidence_type": "Identified Type",
-    "adjusted_reliability": 0.0 to 1.0
-  },
-  "bpa_components": {
-    "support_hypothesis": 0.0,
-    "against_hypothesis": 0.0,
-    "uncertainty": 0.0
+  "labels": {
+    "source_privilege": "GOLD_STANDARD or EXTERNAL_LITERATURE",
+    "relevance": "HIGHLY_RELEVANT or PARTIALLY_RELEVANT or IRRELEVANT",
+    "source_quality": "GOLD_STANDARD or SYSTEMATIC_REVIEW or RCT or COHORT_CASE_CONTROL or CASE_SERIES or UNCLEAR_BASIC",
+    "quality_trap": "NO_TRAP or WEAK_SUBGROUP or ANIMAL_MODEL_ONLY or CONTRADICTORY_INTERNAL",
+    "evidence_direction": "STRONGLY_SUPPORTS_[Option] or WEAKLY_SUPPORTS_[Option] or NEUTRAL or WEAKLY_REFUTES_[Option] or STRONGLY_REFUTES_[Option]"
   }
 }
+```
 """
-
-Prompt_D = """
-角色（Role）：
-你是一名精通Dempster-Shafer理论的推理专家。你的核心能力是穿透数字迷雾，评估证据集合的真实说服力。
-
-任务（Task）：
-分析给定的证据BPA（基本概率分配），评估冲突，识别逻辑链，并解释最终的信念分布态势。
-
-分析要求（Instructions）：
-
-1. 冲突检测与数据态势：
-   - **冲突检测**：检查是否存在实质性矛盾（如 Strong YES vs Strong NO）。
-   - **态势分析（CRITICAL）**：
-     - 如果所有证据都指向同一方向（例如均为 Against），即使总 Belief 不高（如 0.5-0.6），也应视为 **"一致性倾向 (Consistent Trend)"**，而非冲突。
-     - 此时冲突等级应标记为 **low**，因为没有反方证据。
-
-2. 推理链识别：
-   - 寻找逻辑连接（因果、传递）。
-   - 识别单调性：如果证据 A 支持 B，证据 B 进一步支持 C，这增强了链条强度。
-
-3. 融合策略建议：
-   - **Low Conflict (一致性强)**：推荐 **Dempster** 规则，以强化共识。
-   - **High Conflict (矛盾强)**：推荐 **Murphy** 规则，取平均以平抑矛盾。
-   - 注意：如果是因为"证据少"导致的 Belief 低，这不叫冲突，这叫"信息量不足"，此时仍应优先使用 Dempster 累积置信度。
-
-4. 推理解释：
-   - 解释信念度的分布形态（例如："证据一致指向否定假设，虽然绝对值中等，但无反对意见"）。
-   - 指出主要的不确定性是来自于"证据质量/数量不足"还是"证据间的矛盾"。
-
-约束条件：
-- 严谨区分 "Uncertainty" (不知道) 和 "Conflict" (有分歧)。
-- 输出结构化JSON。
-
-输出格式（JSON ONLY）：
-{
-  "conflict_analysis": {
-    "conflict_level": "low/medium/high",
-    "conflict_coefficient_estimate": 0.0,
-    "conflict_sources": [],
-    "recommended_fusion_strategy": "dempster/murphy/manual_review"
-  },
-  "reasoning_chains": [
-    {
-      "chain_type": "causal/transitive/support",
-      "path": ["evidence_ids"],
-      "description": "简述链条逻辑",
-      "chain_strength": 0.0
-    }
-  ],
-  "fusion_strategy": {
-    "primary_method": "dempster/murphy",
-    "reason": "解释选择该策略的原因",
-    "special_handling": []
-  },
-  "reasoning_explanation": {
-    "key_supporting_evidence": [],
-    "key_contradicting_evidence": [],
-    "main_uncertainty_sources": [],
-    "overall_reasoning_path": "总结性的推理路径描述"
-  }
-}
-
-识别框架（Frame of Discernment）：
-{{FRAME_OF_DISCERNMENT}}
-
-证据BPA列表：
-{{BPA_LIST}}
-
-问题背景：
-{{QUESTION_CONTEXT}}
-"""
-
-# Prompt_D = """
-# ### Role
-# 你是一名精通 Dempster-Shafer 理论的医学决策裁判。你的任务是在多方证据中裁决出唯一的真相。
-
-# ### Input Data
-# 1.  **Question & Frame of Discernment (FoD)**: 问题及可能的选项集合（如 A, B, C, D）。
-# 2.  **Evidence Evaluations**: 来自上游专家（Agent C）的证据评估，包含每条证据的 BPA 分数、支持度及证据内容的摘要。
-
-# ### Critical Thinking Protocol (思维协议 - 必须严格执行)
-
-# #### Step 1: Evidence-to-Option Mapping (证据归位)
-# * **核心任务**: 遍历每一条证据，阅读其内容和 Agent C 的分析，判断它具体支持 FoD 中的**哪一个选项**。
-# * **严禁**: 不要假设所有高分证据都支持同一个选项！
-# * **操作**: 
-#     * 如果证据提到 "Cisplatin" 或 "Cross-linking"，它归属于 "Cross-linking of DNA" (Option D)。
-#     * 如果证据提到 "Proteasome inhibitor"，它归属于 "Inhibition of proteasome" (Option A)。
-#     * 创建一个映射表：Evidence ID -> Supported Option。
-
-# #### Step 2: Conflict & Competition Analysis (冲突与竞争)
-# * **真正义的冲突**: 不是指 "Support vs Against"，而是指 **"Option A 的证据 vs Option D 的证据"**。
-# * **态势判断**: 
-#     * 如果 Evidence 4 (Strength 0.8) 支持 Option D，而 Evidence 1, 2 (Strength 0.2) 支持 Option A。
-#     * **结论**: Option D 胜出，尽管 Option A 也有证据，但强度不如 D。
-#     * **错误纠正**: 绝不能因为 Evidence 1 和 2 数量多，就无视强度最高的 Evidence 4。
-
-# #### Step 3: Global Belief Fusion (全局融合)
-# * 计算每个 Option 的累积置信度 (Accumulated Belief)。
-# * **Winner Takes All**: 最终决策必须指向累积置信度最高的那个 Option。
-
-# ---
-
-# ### Output Format (JSON Only)
-# {
-#   "mapping_analysis": {
-#     "evidence_distribution": {
-#       "Option A": ["id1", "id2"],
-#       "Option D": ["id4"]
-#     },
-#     "dominant_option": "识别出的最强选项"
-#   },
-#   "conflict_analysis": {
-#     "conflict_level": "high/medium/low",
-#     "conflict_description": "例如：Option A 和 Option D 存在激烈竞争，但 D 的核心证据更具决定性（如确诊金标准）。",
-#     "recommended_fusion_strategy": "dempster"
-#   },
-#   "reasoning_chains": [
-#     {
-#       "chain_type": "decisive_path",
-#       "path": ["evidence_id"],
-#       "description": "例如：Evidence 4 明确指出了该药物的作用机制是 DNA Cross-linking，且可靠性评分极高。",
-#       "chain_strength": 0.8
-#     }
-#   ],
-#   "fusion_result": {
-#     "fused_bpa": {
-#       "support_hypothesis": 0.0 to 1.0 (针对最终胜出的选项),
-#       "against_hypothesis": 0.0,
-#       "uncertainty": 0.0
-#     },
-#     "method": "dempster",
-#     "evidence_count": 0
-#   },
-#   "final_decision": {
-#     "decision": "选出的具体选项内容 (例如: Cross-linking of DNA)",
-#     "confidence": 0.0 to 1.0,
-#     "reason": "简述为何该选项击败了其他选项"
-#   }
-# }
-
-# ### Current Context
-# **Question**: {{QUESTION}}
-# **Frame of Discernment**: {{FOD}}
-# **Evidence Evaluations**: 
-# {{EVALUATIONS_LIST}}
-# """
 
 Prompt_E = """
 # Role
@@ -863,112 +346,6 @@ Prompt_E = """
 
 # ==================== 测试用简化提示词 ====================
 
-# Prompt_E_Test_MCQ = """
-# ### Role
-# You are a **Master Medical Diagnostician** taking a high-stakes board exam (USMLE Step 2/3 style). Your goal is to select the **SINGLE BEST ANSWER** based on the provided evidence dossier and mathematical reasoning.
-
-# ### Input Data (The Dossier)
-# 1. **Question**: {{QUESTION}}
-# 2. **System Decision**: {{FINAL_DECISION}} (Mathematical consensus).
-# 3. **D-S Fusion**: {{FUSION_RESULT}} (Mass assignment).
-# 4. **Belief Metrics**: {{BELIEF_ANALYSIS}} (Belief = Truth; Plausibility = Potential).
-# 5. **Evidence**: {{EVIDENCE_LIST}} (Retrieved snippets).
-# 6. **History**: {{REASONING_HISTORY}}.
-
-# ### 🧠 The "Board Exam" Solving Protocol (Internal Thought Process)
-
-# **Step 1: Check the "System Decision" First**
-# - If the System Decision is **YES/NO** (High Confidence):
-#   - **Trust it**. The math has likely found a strong evidence match.
-#   - Verification: Does the evidence list contain a "smoking gun" (e.g., a specific symptom matching the option)? If yes, confirm the system decision.
-
-# **Step 2: Handle "Uncertainty" (The Tie-Breaker Logic)**
-# - If System Decision is **UNCERTAIN** or "Insufficient Evidence", do NOT give up. You MUST pick a winner using these heuristics:
-#   - **Heuristic A (Plausibility Check)**: Look at `BELIEF_ANALYSIS`. Which option has the highest `Plausibility` (Pl)? Even if `Belief` is low, high Plausibility means "not ruled out".
-#   - **Heuristic B (Least Refuted)**: Which option has the lowest `Against_Hypothesis` mass? The "least wrong" answer is often the right one.
-#   - **Heuristic C (Clinical Priority)**: 
-#     - If the question asks "Next Step", prioritize **Life-Saving** (Airway/Breathing/Circulation) over Diagnostics.
-#     - If the question asks "Diagnosis", look for **Pathognomonic Signs** in the question text (e.g., "target rash" -> Lyme) even if evidence is weak.
-
-# **Step 3: The "Negative Question" Trap**
-# - **CRITICAL**: Check if the question asks "Which is FALSE?", "EXCEPT", or "NOT indicated".
-# - If yes, you are looking for the option with the **Lowest Belief** or **Highest Refutation**.
-# - *Example*: If evidence strongly supports A, B, and C, and the question asks "All are true EXCEPT...", then D is the answer.
-
-# **Step 4: Final Validity Check**
-# - Does your chosen answer make medical sense for the patient's age/gender/symptoms?
-# - **Override Rule**: If the D-S math points to a clinically absurd option (e.g., prescribing antibiotics for a viral cold), override it with your internal medical knowledge.
-
-# ### Output Format (JSON ONLY)
-# Strictly output valid JSON. No markdown outside the code block.
-
-# ```json
-# {
-#   "reasoning": "Step 1: System decision is [X]. Step 2: Evidence [Ref: 1] supports [Key Concept]. Step 3: Comparing options, Option [A] aligns best with the 'Silent Chest' sign described. Step 4: Although Option [B] is plausible, it is less urgent. Therefore, [A] is the best next step.",
-#   "answer": "A" // MUST be a single uppercase letter: A, B, C, or D.
-# }
-# Constraints
-# Zero Refusal: You cannot say "I don't know". You must guess the most likely option.
-
-# Evidence Citation: Cite [Ref: ID] if you use retrieved evidence. 
-# """
-
-# Prompt_E_Test_MCQ = """
-# ### Role
-# You are a **Master Medical Diagnostician** taking a high-stakes board exam (USMLE Step 2/3 style). Your goal is to select the **SINGLE BEST ANSWER** (Option A, B, C, or D) based on the provided evidence dossier and mathematical reasoning.
-
-# ### ⚠️ CRITICAL OUTPUT RULES
-# 1. **JSON ONLY**: Your response must be a single valid JSON object. Do not include markdown fencing (```json) or conversational text.
-# 2. **Format Definition**:
-# {
-#   "thought_process": "Briefly explain the mapping between System Decision and the Option Letter. Cite key evidence.",
-#   "selected_option": "A", // MUST be a single uppercase letter: A, B, C, or D.
-#   "confidence_score": 0.0 to 1.0
-# }
-
-# ### 🧠 Solving Protocol (Internal Thought Process)
-
-# **Step 1: Map System Decision to Option Letter**
-# - Look at the `System Decision` (e.g., "Inhibition of proteasome").
-# - Look at the `Question & Options`.
-# - **Action**: Find which Option (A, B, C, or D) matches the System Decision text.
-# - *Example*: If System says "DNA Cross-linking" and Option D is "Cross-linking of DNA", then **Target = D**.
-
-# **Step 2: Validate with Evidence (The "Smoking Gun")**
-# - Read the `[Analyst Insights]` in the Evidence List.
-# - Does the best evidence support this target? 
-# - If the System Decision seems mathematically weak (Low Belief), use your **Internal Medical Knowledge** to pick the clinically correct answer.
-
-# **Step 3: Handle "Negative Questions" (TRAP!)**
-# - Check if the question asks "Which is FALSE?", "EXCEPT", or "NOT indicated".
-# - If **YES**: You must select the option that has the **Lowest Belief** or **Highest Refutation** in the D-S Fusion results. The "System Decision" might point to the "True" fact, so you must inverse it.
-
-# **Step 4: Final Sanity Check**
-# - Does the selected option make biological/clinical sense for the patient described?
-# - **Zero Refusal**: You CANNOT say "I don't know". You MUST pick the most probable letter.
-
-# ---
-# ### Input Dossier
-
-# **1. The Exam Question**: 
-# {{QUESTION}}
-
-# **2. System Consensus (The Math)**: 
-# - **Decision**: {{FINAL_DECISION}}
-# - **D-S Fusion**: {{FUSION_RESULT}}
-# - **Belief Analysis**: {{BELIEF_ANALYSIS}}
-
-# **3. Evidence Dossier (Read [Analyst Insights] carefully)**: 
-# {{EVIDENCE_LIST}}
-
-# **4. Reasoning History**: 
-# {{REASONING_HISTORY}}
-
-# ---
-# ### Task
-# Based on the dossier above, output the final JSON answer.
-# """
-
 Prompt_E_Test_MCQ = """
 ### Role
 You are a **Chief Medical Examiner** reviewing a diagnostic case. Your goal is to select the **SINGLE BEST ANSWER** (Option A, B, C, or D).
@@ -1041,41 +418,45 @@ You are provided with the following structured information:
 ## 1. Research Question
 {{QUESTION}}
 
-## 2. Evidence Sufficiency Consensus (System Attitude)
+## 2. System Final Decision (Medical Conclusion)
 {{FINAL_DECISION}}
-*IMPORTANT NOTE*: 
-- The `decision` ("YES"/"NO") and `confidence` here represent the system's belief in **"Answerability"**. 
-- A "YES" with high confidence (e.g., >0.9) means: "The system has found sufficient, high-quality evidence to answer this question."
-- It does **NOT** imply the medical answer is "yes". The answer could be "no", but we are very confident in that "no".
+*IMPORTANT NOTE — READ CAREFULLY*:
+- The `decision` field ("YES"/"NO") IS the **medical conclusion** produced by the upstream Dempster-Shafer evidence fusion.
+- `decision: YES` means: "The fused evidence strongly supports the hypothesis stated in the question." → Your `answer` field MUST be `"yes"`.
+- `decision: NO` means: "The fused evidence strongly refutes the hypothesis." → Your `answer` field MUST be `"no"`.
+- The `confidence` value reflects the statistical strength of this conclusion.
+- **You must NOT re-derive the medical answer independently by re-reading raw evidence text.** The upstream pipeline has already classified and fused all evidence correctly using RESULTS-section data only.
 
 Fusion Stats:
 {{FUSION_RESULT}}
 
-## 3. Evidence Dossier (Weighted Knowledge Fragments)
+## 3. Evidence Dossier (For Explanation Only)
 {{EVIDENCE_LIST}}
-*Instruction*: Each evidence fragment contains quality metrics (e.g., `Support Score`, `Reliability`). You must prioritize fragments with higher scores.
+*Instruction*: Use the evidence fragments ONLY to build your explanation narrative. Do NOT use them to change or override the System Final Decision above.
+- Fragments labeled `[Status]: SUPPORT` are the key supporting evidence — use them in your reasoning explanation.
+- Fragments labeled `[Status]: NEUTRAL` are non-informative — mention them only as limitations if needed.
+- **WARNING**: Evidence text may contain BACKGROUND/HYPOTHESES sections that sound negative (e.g., "X may not be reliable", "we investigated whether X works"). These are research motivations, not findings. Do NOT let them influence your `answer` value.
 
 ## 4. Reasoning History
 {{REASONING_HISTORY}}
 
 # Task Instructions (Step-by-Step)
 
-### Step 1: Assess Answerability (Attitude Check)
-Check the `confidence` in Section 2.
-- If **High (>0.8)**: You should be decisive. The evidence provided is likely strong.
-- If **Low (<0.6)**: You should be cautious. Your final answer might lean towards "maybe" or explicitly state uncertainty.
+### Step 1: Copy the Medical Answer from Section 2
+- Read `decision` in Section 2.
+- Set your `answer` = `"yes"` if decision = "YES"; `"no"` if decision = "NO".
+- Do not deviate from this. The decision is the output of a rigorous multi-agent pipeline.
 
-### Step 2: Select & Verify Evidence (Quality & Relevance Check)
-Scan the `Evidence Dossier`. Do not treat all evidence equally.
-1.  **Score-Based Filtering**: Focus primarily on evidence fragments with high `Support Score` and `Reliability`. Trust these high-scoring fragments more than low-scoring ones.
-2.  **Semantic Alignment (Crucial)**: Even if a fragment has a high score, you MUST verify that its content matches the **Subject** and **Intervention** in the Research Question. 
-    - *Example Warning*: If the Question is about "Hirschsprung disease", ignore high-scoring evidence about "Rectal Cancer", even if the surgery names look similar.
-3.  **Discard Noise**: Ignore evidence labeled as `[Status]: NEUTRAL` or low relevance unless it's the only info available.
+### Step 2: Select Supporting Evidence for Explanation
+Scan the `Evidence Dossier` for fragments with `[Status]: SUPPORT`.
+- Focus on the RESULTS-section data and numeric findings quoted in those fragments.
+- Ignore BACKGROUND/HYPOTHESES text (research motivation ≠ finding).
 
 ### Step 3: Synthesize Final Answer
-Based *only* on the valid, high-scoring evidence selected in Step 2:
-- Determine if the clinical conclusion is **yes** (supports hypothesis), **no** (refutes hypothesis), or **maybe** (inconclusive).
-- **REMEMBER**: It is perfectly valid for the System Confidence to be 0.99 (High), while your generated Answer is "no" (because the evidence strongly proves the intervention doesn't work).
+- Write a concise clinical reasoning that explains WHY the evidence supports the decision.
+- Anchor to specific numbers, percentages, or p-values from the RESULTS section.
+- If there is a conflicting sub-finding in the evidence (e.g., one metric shows mismatch), acknowledge it as a limitation/caveat, but DO NOT let it flip the answer.
+- The `answer` field must match Step 1 — it cannot conflict with the System Decision.
 
 # Output Format
 Output a single JSON object strictly following this schema:
@@ -1089,7 +470,4 @@ Output a single JSON object strictly following this schema:
     "List the Source IDs or Titles of the HIGH-SCORING evidence that directly supported your answer. Do not list low-scoring or irrelevant evidence."
   ]
 }
-# Constraints
-- Be Decisive: Avoid "maybe" if there is a >60% probability lean.
-- Lowercase Only: The answer field must be lowercase. 
 """

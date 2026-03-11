@@ -10,16 +10,16 @@ from datetime import datetime
 from typing import Dict, List
 from tqdm import tqdm
 
-from agents import AgentA, AgentB, AgentC, AgentD, CompletenessController
+from agents import AgentA, AgentB, AgentC, AgentD, CompletenessController, extract_json_from_response
 from retriever import retrieve_process
 from llm_client import call_llm
 from prompt import Prompt_E_Test_YesNo
 
 
 # ==================== 配置参数 ====================
-DATA_PATH = "data/pubmedqa_sample.json"  # PubMedQA数据集路径
+DATA_PATH = "data/pubmedqa_hard.json"  # PubMedQA数据集路径
 OUTPUT_DIR = "TEST_RESULTS/pubmedqa"               # 结果输出目录
-TEST_LIMIT = 5                           # 测试数量，None表示全部测试
+TEST_LIMIT = 10                           # 测试数量，None表示全部测试
 MAX_ROUNDS = 1                            # 最大检索轮次
 SAVE_INTERVAL = 100                         # 保存间隔
 # ================================================
@@ -32,58 +32,53 @@ class AgentE_Test_YesNo:
         self.reasoning_history = []
     
     def add_reasoning_round(self, round_num: int, evidence_count: int, bpa_summary: Dict, note: str):
+        from datetime import datetime
         self.reasoning_history.append({
             "round": round_num,
             "evidence_count": evidence_count,
             "bpa_summary": bpa_summary,
-            "note": note
+            "note": note,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         })
     
-    def run(self, question: str, final_decision: Dict, fusion_result: Dict, 
-            belief_analysis: Dict, evidence_list: List[Dict]) -> Dict:
-        """生成测试答案"""
+    def run(self, question: str, final_decision: Dict, fusion_result: Dict,
+            evidence_list: List[Dict]) -> Dict:
+        """生成测试答案（与 AgentE.generate_report 保持一致）"""
         # 构建prompt
         prompt = Prompt_E_Test_YesNo.replace("{{QUESTION}}", question)
         prompt = prompt.replace("{{FINAL_DECISION}}", json.dumps(final_decision, indent=2))
         prompt = prompt.replace("{{FUSION_RESULT}}", json.dumps(fusion_result, indent=2))
-        prompt = prompt.replace("{{BELIEF_ANALYSIS}}", json.dumps(belief_analysis, indent=2))
-        
-        # 简化证据列表
+
+        # 与真实 AgentE.generate_report 保持一致的证据构建方式
         simplified_evidence = []
         for ev in evidence_list[:10]:
             simplified_evidence.append({
-                "source": ev.get('source_type', ev.get('source', 'Unknown')),
-                "content": ev.get('content', '')[:2000]
+                "source_type": ev.get('source_type', 'Unknown'),
+                "metadata": ev.get('metadata', {}),
+                "content_snippet": ev.get('content', '')[:500000] + "..."
             })
-        
+
         prompt = prompt.replace("{{EVIDENCE_LIST}}", json.dumps(simplified_evidence, indent=2, ensure_ascii=False))
         prompt = prompt.replace("{{REASONING_HISTORY}}", json.dumps(self.reasoning_history, indent=2, ensure_ascii=False))
-        
+
         # 调用LLM
         response = call_llm(prompt, temperature=0, max_tokens=500)
-        
-        # 解析JSON响应
-        try:
-            if "```json" in response:
-                json_str = response.split("```json")[1].split("```")[0].strip()
-            elif "```" in response:
-                json_str = response.split("```")[1].split("```")[0].strip()
-            else:
-                json_str = response.strip()
-            
-            result = json.loads(json_str)
+
+        # 使用与真实 AgentE 相同的健壮 JSON 解析（支持 <think> 块和多种格式）
+        result = extract_json_from_response(response)
+        if result is not None:
             return result
-        except json.JSONDecodeError:
-            # 尝试直接提取答案
-            response_lower = response.lower()
-            answer = ""
-            if "yes" in response_lower:
-                answer = "yes"
-            elif "no" in response_lower:
-                answer = "no"
-            elif "maybe" in response_lower:
-                answer = "maybe"
-            return {"reasoning": response, "answer": answer}
+
+        # 解析失败时降级：从文本中提取答案
+        response_lower = response.lower()
+        answer = ""
+        if "yes" in response_lower:
+            answer = "yes"
+        elif "no" in response_lower:
+            answer = "no"
+        elif "maybe" in response_lower:
+            answer = "maybe"
+        return {"reasoning": response, "answer": answer}
 
 
 class PubMedQAEvaluator:
@@ -229,6 +224,7 @@ class PubMedQAEvaluator:
             hypothesis=contextual_question,
             agent_b_result=agent_b_result,
             question_pico=question_pico_data,
+            frame_of_discernment=fod,  # 与 main.py 保持一致，传入实际 FoD
             verbose=False
         )
         
@@ -280,8 +276,7 @@ class PubMedQAEvaluator:
             "reason": "未获得决策结果"
         })
         fusion_result = agent_d_result.get('fusion_result', {})
-        belief_analysis = agent_d_result.get('belief_plausibility', {})
-        
+
         agent_e.add_reasoning_round(
             round_num=1,
             evidence_count=len(all_evidence),
@@ -298,7 +293,6 @@ class PubMedQAEvaluator:
             question=question,
             final_decision=final_decision,
             fusion_result=fusion_result,
-            belief_analysis=belief_analysis,
             evidence_list=enhanced_evidence_input
         )
         

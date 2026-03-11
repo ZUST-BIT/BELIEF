@@ -6,10 +6,8 @@ MEDAR-QA 主流程 - 带多轮检索闭环
 import json
 from datetime import datetime
 from typing import Dict, Any, List
-
 from agents import AgentA, AgentB, AgentC, AgentD, AgentE, CompletenessController
 from retriever import retrieve_process
-
 
 def main():
     """主测试函数 - 带多轮检索闭环"""
@@ -22,26 +20,27 @@ def main():
     #     "C":"IL-13",
     #     "D":"IL-4"}
     # """
-    # context = ""
-    question = "Syncope during bathing in infants, a pediatric form of water-induced urticaria?"
-    context = """
-            "Apparent life-threatening events in infants are a difficult and frequent problem in pediatric practice. The prognosis is uncertain because of risk of sudden infant death syndrome. Eight infants aged 2 to 15 months were admitted during a period of 6 years; they suffered from similar maladies in the bath: on immersion, they became pale, hypotonic, still and unreactive; recovery took a few seconds after withdrawal from the bath and stimulation. Two diagnoses were initially considered: seizure or gastroesophageal reflux but this was doubtful. The hypothesis of an equivalent of aquagenic urticaria was then considered; as for patients with this disease, each infant's family contained members suffering from dermographism, maladies or eruption after exposure to water or sun. All six infants had dermographism. We found an increase in blood histamine levels after a trial bath in the two infants tested. The evolution of these \"aquagenic maladies\" was favourable after a few weeks without baths. After a 2-7 year follow-up, three out of seven infants continue to suffer from troubles associated with sun or water."
+    question = """
+            "question": "A 67-year-old man with transitional cell carcinoma of the bladder comes to the physician because of a 2-day history of ringing sensation in his ear. He received this first course of neoadjuvant chemotherapy 1 week ago. Pure tone audiometry shows a sensorineural hearing loss of 45 dB. The expected beneficial effect of the drug that caused this patient's symptoms is most likely due to which of the following actions?",
+            "options": {
+            "A": "Inhibition of proteasome",
+            "B": "Hyperstabilization of microtubules",
+            "C": "Generation of free radicals",
+            "D": "Cross-linking of DNA"
+            },
     """
-    # question = "Are the long-term results of the transanal pull-through equal to those of the transabdominal pull-through?"
+    context = """
+            Chemotherapeutic agents used in the treatment of solid tumors often produce a variety of systemic adverse effects because they target rapidly dividing cells and may also affect certain normal tissues. In the management of bladder cancer, several classes of antineoplastic drugs are commonly used in neoadjuvant or adjuvant settings before surgical intervention. These include platinum-based compounds, taxanes, and other cytotoxic agents that interfere with cellular replication or survival pathways.
+            One well-recognized complication of certain chemotherapy drugs is ototoxicity, which may manifest as tinnitus, hearing loss, or balance disturbances. The underlying mechanism is thought to involve damage to the sensory hair cells of the cochlea within the inner ear. In some cases, oxidative stress and mitochondrial injury contribute to this toxicity, particularly in patients receiving repeated cycles of chemotherapy.
+            Different chemotherapeutic drugs exert their anticancer effects through distinct molecular mechanisms. For instance, some agents interfere with the proteasome, disrupting protein degradation pathways important for tumor cell survival. Others affect the microtubule network, preventing proper mitotic spindle formation and thereby inhibiting cell division. There are also drugs that induce cellular damage through the generation of reactive oxygen species, which can harm both cancer cells and certain normal tissues.
+            Because chemotherapy regimens are selected based on tumor type and patient condition, clinicians must carefully weigh therapeutic benefits against the risk of adverse effects, including neurotoxicity and ototoxicity, when designing treatment strategies for cancer patients.
+    """
+    # question = "Colorectal cancer in young patients: is it a distinct clinical entity?"
     # context = """
-    #         "The transanal endorectal pull-through (TERPT) is becoming the most popular procedure in the treatment of Hirschsprung disease (HD), but overstretching of the anal sphincters remains a critical issue that may impact the continence. This study examined the long-term outcome of TERPT versus conventional transabdominal (ABD) pull-through for HD. Records of 41 patients more than 3 years old who underwent a pull-through for HD (TERPT, n = 20; ABD, n = 21) were reviewed, and their families were thoroughly interviewed and scored via a 15-item post-pull-through long-term outcome questionnaire. Patients were operated on between the years 1995 and 2003. During this time, our group transitioned from the ABD to the TERPT technique. Total scoring ranged from 0 to 40: 0 to 10, excellent; 11 to 20 good; 21 to 30 fair; 31 to 40 poor. A 2-tailed Student t test, analysis of covariance, as well as logistic and linear regression were used to analyze the collected data with confidence interval higher than 95%. Overall scores were similar. However, continence score was significantly better in the ABD group, and the stool pattern score was better in the TERPT group. A significant difference in age at interview between the 2 groups was noted; we therefore reanalyzed the data controlling for age, and this showed that age did not significantly affect the long-term scoring outcome between groups."
+    #         "The incidence of colorectal cancer in young patients is increasing. It remains unclear if the disease has unique features in this age group",
+    #         "This was a single-center, retrospective cohort study which included patients diagnosed with colorectal cancer at age \u226440\u00a0years in 1997-2013 matched 1:2 by year of diagnosis with consecutive colorectal cancer patients diagnosed at age>50\u00a0years during the same period. Patients aged 41-50\u00a0years were not included in the study, to accentuate potential age-related differences. Clinicopathological characteristics, treatment, and outcome were compared between groups.",
+    #         "The cohort included 330 patients, followed for a median time of 65.9\u00a0months (range 4.7-211). Several significant differences were noted. The younger group had a different ethnic composition. They had higher rates of family history of colorectal cancer (p\u00a0=\u00a00.003), hereditary colorectal cancer syndromes (p\u00a0<\u00a00.0001), and inflammatory bowel disease (p\u00a0=\u00a00.007), and a lower rate of polyps (p\u00a0<\u00a00.0001). They were more likely to present with stage III or IV disease (p\u00a0=\u00a00.001), angiolymphatic invasion, signet cell ring adenocarcinoma, and rectal tumors (p\u00a0=\u00a00.02). Younger patients more frequently received treatment. Young patients had a worse estimated 5-year disease-free survival rate (57.6\u00a0 vs. 70\u00a0%, p\u00a0=\u00a00.039), but this did not retain significance when analyzed by stage (p\u00a0=\u00a00.092). Estimated 5-year overall survival rates were 59.1 and 62.1\u00a0% in the younger and the control group, respectively (p\u00a0=\u00a00.565)."
     # """
-    # question = """
-    #         "question": "A 67-year-old man with transitional cell carcinoma of the bladder comes to the physician because of a 2-day history of ringing sensation in his ear. He received this first course of neoadjuvant chemotherapy 1 week ago. Pure tone audiometry shows a sensorineural hearing loss of 45 dB. The expected beneficial effect of the drug that caused this patient's symptoms is most likely due to which of the following actions?",
-    #         "options": {
-    #         "A": "Inhibition of proteasome",
-    #         "B": "Hyperstabilization of microtubules",
-    #         "C": "Generation of free radicals",
-    #         "D": "Cross-linking of DNA"
-    #         },
-    # """
-    # context = ""
-    
     print("\n" + "="*80)
     print("MEDAR-QA 医学证据推理系统")
     print("="*80)
@@ -91,7 +90,6 @@ def main():
         print(f"\n[轮次 {current_round} - 步骤 2/6] 知识检索：结合实体进行证据检索")
         print("-" * 80)
         retrieval_result = retrieve_process(question, agent_a_result)
-        print(f"本轮检索到 {len(retrieval_result)} 条证据")
         
         # 累积证据
         all_evidence.extend(retrieval_result)
@@ -106,9 +104,7 @@ def main():
         print("-" * 80)
         agent_b_result = agent_b.run(question,all_evidence)
         print("\n智能体B分析结果:")
-        # print(f"agent_b_result type: {type(agent_b_result)}")
         print(json.dumps(agent_b_result, ensure_ascii=False, indent=2))
-        print(f"处理了 {len(all_evidence)} 条累积证据")
         
         # 第4步：调用智能体C进行证据评估
         print(f"\n[轮次 {current_round} - 步骤 4/6] 智能体C：证据可靠性评估与BPA计算")
@@ -119,12 +115,13 @@ def main():
         agent_c_result = agent_c.run(
             hypothesis=contextual_question, 
             agent_b_result=agent_b_result,
-            question_pico=question_pico_data, # <--- 关键修改
-            verbose=True # 建议开启 verbose 方便观察
+            question_pico=question_pico_data,
+            frame_of_discernment=fod,        # <--- 传入FoD，供规则引擎精确分配BPA
+            verbose=False
         )
         print("\n智能体C评估结果:")
         print(json.dumps(agent_c_result, ensure_ascii=False, indent=2))
-        print(f"生成 {len(agent_c_result.get('bpa_list', []))} 个BPA")
+        # print(f"生成 {len(agent_c_result.get('bpa_list', []))} 个BPA")
         
         # 第5步：调用智能体D进行证据融合
         print(f"\n[轮次 {current_round} - 步骤 5/6] 智能体D：多证据融合与决策")
@@ -208,25 +205,16 @@ def main():
     print(f"\n{'='*80}")
     print("[步骤 6/6] 智能体E：生成最终医学证据报告")
     print("="*80)
-    
-    # 从agent_d_result中提取必要信息
-    # 1. 提取 Agent D 的高级推理逻辑 (不仅仅是结果)
-    # 这部分是为了让 Agent E 知道 Agent D 是怎么想的
-    d_reasoning = agent_d_result.get('reasoning_analysis', {})
-    d_mapping = d_reasoning.get('reasoning_explanation', {}).get('key_supporting_evidence', [])
-    d_chains = d_reasoning.get('reasoning_chains', [])
 
     agent_d_logic_note = f"""
     [Agent D Logic Trace]:
     - System Decision: {agent_d_result.get('final_decision', {}).get('decision')}
-    - Key Reasoning Chain: {d_chains[0].get('description') if d_chains else 'None'}
     - Evidence Mapping: Agent D identified specific evidence IDs as supporting the decision. 
       (Agent E MUST verify if this mapping aligns with clinical symptoms).
     """
     agent_e.add_reasoning_round(99, 0, {}, note=agent_d_logic_note)
 
     # 2. 拼接增强型证据列表 (Enhanced Evidence List)
-    # 这是 Agent E 的“主食”，包含 Agent C 的 content_for_generator
     enhanced_evidence_input = []
     c_evaluations = agent_c_result.get('evaluations', [])
     if c_evaluations:

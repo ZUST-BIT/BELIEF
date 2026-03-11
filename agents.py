@@ -6,9 +6,9 @@
 import json
 import re
 import requests
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
-from prompt import Prompt_A, Prompt_B, Prompt_C, Prompt_D, Prompt_E, Prompt_E_Test_MCQ, Prompt_E_Test_YesNo
+from prompt import Prompt_A, Prompt_B, Prompt_E, Prompt_E_Test_MCQ, Prompt_E_Test_YesNo,Prompt_C_Optimized
 from config import set_argument
 from llm_client import call_llm
 
@@ -26,52 +26,97 @@ def extract_json_from_response(response: str) -> dict:
     """
     if not response:
         return None
-    
-    # 方法1: 尝试提取 ```json ... ``` 代码块
+
+    # 步骤0: 预处理——移除 <think>...</think> 块（兼容 Qwen3 等 think 模式模型）
+    if '</think>' in response:
+        response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+    elif '<think>' in response:
+        before = response.split('<think>')[0].strip()
+        if before:
+            response = before
+        else:
+            inner = response.split('<think>', 1)[1]
+            fb, lb = inner.find('{'), inner.rfind('}')
+            if fb != -1 and lb > fb:
+                try:
+                    return json.loads(inner[fb:lb + 1])
+                except json.JSONDecodeError:
+                    pass
+
+    if not response:
+        return None
+
+    # ── 内部工具：状态机扫描出所有完整 JSON 对象的字节范围 ──────────────────────
+    # 正确处理字符串内的 { } （如 "STRONGLY_SUPPORTS_{H}"），不依赖正则，无嵌套层级限制
+    def _scan_json_spans(text: str):
+        spans = []
+        n = len(text)
+        i = 0
+        while i < n:
+            if text[i] != '{':
+                i += 1
+                continue
+            depth = 0
+            in_str = False
+            esc = False
+            j = i
+            while j < n:
+                ch = text[j]
+                if esc:
+                    esc = False
+                elif ch == '\\' and in_str:
+                    esc = True
+                elif ch == '"':
+                    in_str = not in_str
+                elif not in_str:
+                    if ch == '{':
+                        depth += 1
+                    elif ch == '}':
+                        depth -= 1
+                        if depth == 0:
+                            spans.append((i, j + 1))
+                            break
+                j += 1
+            i += 1
+        return spans
+
+    # 方法1: 提取最后一个 ```json ... ``` 代码块（LLM 有时输出多个，取最后）
     if "```json" in response:
-        try:
-            json_str = response.split("```json")[1].split("```")[0].strip()
-            return json.loads(json_str)
-        except (IndexError, json.JSONDecodeError):
-            pass
-    
-    # 方法2: 尝试提取 ``` ... ``` 代码块
-    if "```" in response:
-        try:
-            json_str = response.split("```")[1].split("```")[0].strip()
-            return json.loads(json_str)
-        except (IndexError, json.JSONDecodeError):
-            pass
-    
-    # 方法3: 使用正则表达式查找最后一个完整的JSON对象 {...}
-    # 这处理模型先输出推理文本，最后输出JSON的情况
-    json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
-    matches = re.findall(json_pattern, response, re.DOTALL)
-    
-    if matches:
-        # 从后往前尝试解析（通常最后一个是完整的输出JSON）
-        for match in reversed(matches):
+        parts = response.split("```json")
+        for chunk in reversed(parts[1:]):
+            json_str = chunk.split("```")[0].strip()
             try:
-                return json.loads(match)
+                return json.loads(json_str)
             except json.JSONDecodeError:
                 continue
-    
-    # 方法4: 查找从第一个 { 到最后一个 } 的内容
-    first_brace = response.find('{')
-    last_brace = response.rfind('}')
-    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-        try:
-            json_str = response[first_brace:last_brace + 1]
-            return json.loads(json_str)
-        except json.JSONDecodeError:
-            pass
-    
-    # 方法5: 直接尝试解析整个响应
+
+    # 方法2: 提取最后一个 ``` ... ``` 代码块
+    if "```" in response:
+        parts = response.split("```")
+        # 奇数索引段（1, 3, 5…）是代码块内容，取最后一个
+        code_blocks = [parts[k].strip() for k in range(1, len(parts), 2)]
+        for block in reversed(code_blocks):
+            try:
+                return json.loads(block)
+            except json.JSONDecodeError:
+                continue
+
+    # 方法3: 状态机扫描——找出所有合法 JSON 对象，按长度从大到小尝试解析
+    spans = _scan_json_spans(response)
+    if spans:
+        spans_sorted = sorted(spans, key=lambda x: x[1] - x[0], reverse=True)
+        for start, end in spans_sorted:
+            try:
+                return json.loads(response[start:end])
+            except json.JSONDecodeError:
+                continue
+
+    # 方法4: 直接尝试解析整个响应（响应本身就是纯 JSON）
     try:
         return json.loads(response.strip())
     except json.JSONDecodeError:
         pass
-    
+
     return None
 
 class AgentA:
@@ -84,7 +129,7 @@ class AgentA:
         """初始化智能体A，加载配置"""
         self.args = set_argument()
         
-    def _call_llm_api(self, prompt: str, temperature: float = 0.7) -> str:
+    def _call_llm_api(self, prompt: str, temperature: float = 0.3) -> str:
         """
         调用LLM（统一接口）
         
@@ -95,7 +140,7 @@ class AgentA:
         Returns:
             模型返回的文本响应
         """
-        return call_llm(prompt, temperature=temperature, max_tokens=2000)
+        return call_llm(prompt, temperature=temperature, max_tokens=4096)
     
     def analyze_question(self, question: str) -> Dict[str, Any]:
         """
@@ -145,7 +190,6 @@ class AgentA:
         
         return result
 
-
 class AgentB:
     """
     智能体B - 生物医学证据分析智能体
@@ -168,7 +212,7 @@ class AgentB:
         Returns:
             模型返回的文本响应
         """
-        return call_llm(prompt, temperature=temperature, max_tokens=2000)
+        return call_llm(prompt, temperature=temperature, max_tokens=4096)
     
     def analyze_evidence(self, evidence_text: str) -> Dict[str, Any]:
         """
@@ -290,7 +334,6 @@ class AgentB:
         
         return result
 
-
 class AgentC:
     """
     智能体C - 基于D-S理论的证据评估智能体
@@ -301,18 +344,37 @@ class AgentC:
         """初始化智能体C，加载配置"""
         self.args = set_argument()
         
-    def _call_llm_api(self, prompt: str, temperature: float = 0.1) -> str:
+    def _call_llm_api(self, prompt: str, temperature: float = 0.1,
+                       max_retries: int = 3, retry_delay: float = 5.0) -> str:
         """
-        调用LLM（统一接口）
-        
+        调用LLM（统一接口），带重试逻辑，批量场景下应对短暂网络抖动。
+
         Args:
             prompt: 输入提示词
             temperature: 温度参数
-            
+            max_retries: 最大重试次数
+            retry_delay: 初次重试等待秒数（指数退避）
+
         Returns:
-            模型返回的文本响应
+            模型返回的文本响应（失败时返回空字符串）
         """
-        return call_llm(prompt, temperature=temperature, max_tokens=1500)
+        import time
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                result = call_llm(prompt, temperature=temperature, max_tokens=4096)
+                if result:          # 非空即成功
+                    return result
+                # 空响应视为软失败，继续重试
+                raise ValueError("LLM returned empty response")
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    wait = retry_delay * (2 ** (attempt - 1))   # 指数退避: 5s, 10s, 20s
+                    print(f"[Agent C] API调用第{attempt}次失败，{wait:.0f}s后重试... ({e})")
+                    time.sleep(wait)
+        print(f"[Agent C] API调用连续{max_retries}次失败，跳过本条评估: {last_error}")
+        return ""
 
     def _format_evidence_for_prompt(self, content: str, analysis: Dict[str, Any], source_type: str = "Unknown") -> str:
         """
@@ -340,37 +402,51 @@ class AgentC:
         return formatted_text
 
     def _format_result_for_generator(self, evidence_content: str, analysis_result: Dict[str, Any]) -> str:
-        """
-        [核心新增 Helper 2] 
-        将 '原始证据' + 'Agent C的分析结果' 组装成一段给生成模型看的文本块。
-        这样下游模型直接读这个字段就能写文章，不用解析复杂的JSON。
-        """
-        # 1. 提取关键信息 (使用 .get 避免报错)
-        reasoning = analysis_result.get('step_by_step_reasoning', {})
-        nli = analysis_result.get('nli_analysis', {})
-        bpa = analysis_result.get('bpa_components', {})
-        rel = analysis_result.get('reliability_assessment', {})
+            """
+            [重构版] 适配标签分类体系，组装给生成模型看的文本块
+            """
+            # 兼容新的 reasoning_trace 键名（重构后）和旧的 step_by_step_reasoning 键名
+            reasoning = analysis_result.get('reasoning_trace',
+                        analysis_result.get('step_by_step_reasoning', {}))
+            metrics = analysis_result.get('metrics', {})
+            labels = analysis_result.get('labels', {})
+            bpa = analysis_result.get('bpa_components', {})
+
+            # 确定主要的结论倾向
+            status = "NEUTRAL"
+            if bpa.get('support_hypothesis', 0) > bpa.get('against_hypothesis', 0):
+                status = "SUPPORT"
+            elif bpa.get('against_hypothesis', 0) > bpa.get('support_hypothesis', 0):
+                status = "REFUTE"
+
+            formatted_block = f"""
+    <<<< EVIDENCE ANALYSIS REPORT (Label-Based) >>>>
+    [Status]: {status}
+    [Classification Labels]:
+    - Source Privilege : {labels.get('source_privilege', 'N/A')}
+    - Relevance        : {labels.get('relevance', 'N/A')}
+    - Source Quality   : {labels.get('source_quality', 'N/A')}
+    - Quality Trap     : {labels.get('quality_trap', 'N/A')}
+    - Evidence Direction: {labels.get('evidence_direction', 'N/A')}
+
+    [Computed BPA (Rule Engine)]:
+    - Reliability (W)  : {metrics.get('adjusted_reliability_W', 0):.3f}
+    - Degree of Support: {metrics.get('degree_of_support_D', 0):.3f}
+    - Support          : {bpa.get('support_hypothesis', 0):.4f}
+    - Refute           : {bpa.get('against_hypothesis', 0):.4f}
+    - Uncertainty      : {bpa.get('uncertainty', 0):.4f}
+
+    [Analyst Reasoning (Agent C)]:
+    - Relevance   : {reasoning.get('relevance_reasoning', reasoning.get('relevance_analysis', 'N/A'))}
+    - Quality     : {reasoning.get('source_quality_reasoning', reasoning.get('reliability_rationale', 'N/A'))}
+    - Direction   : {reasoning.get('direction_reasoning', reasoning.get('alignment_analysis', 'N/A'))}
+
+    [Original Evidence Content]:
+    {evidence_content}
+    <<<< END REPORT >>>>
+    """
+            return formatted_block
         
-        # 2. 组装文本 (使用清晰的分隔符和标签)
-        formatted_block = f"""
-<<<< EVIDENCE ANALYSIS REPORT >>>>
-[Status]: {nli.get('dominant_relation', 'NEUTRAL')}
-[Quality Metrics]: 
-  - Reliability: {rel.get('adjusted_reliability', 0):.2f} ({rel.get('evidence_type', 'Unknown')})
-  - Support Score: {bpa.get('support_hypothesis', 0):.4f}
-  - Contradiction Score: {bpa.get('against_hypothesis', 0):.4f}
-
-[Analyst Insights (Agent C)]:
-  - Logical Inference: {reasoning.get('logical_inference', 'N/A')}
-  - Trap Check: {reasoning.get('trap_check', 'None triggered')}
-  - Normalized Hypothesis: {reasoning.get('normalized_hypothesis', 'N/A')}
-
-[Original Evidence Content]:
-{evidence_content}
-<<<< END REPORT >>>>
-"""
-        return formatted_block
-    
     def calculate_bpa(
         self, 
         entailment: float, 
@@ -427,77 +503,246 @@ class AgentC:
             f" - Outcome (O): {pico_data.get('O', 'N/A')}"
         )
     
+    # ============================================================
+    # 标签驱动BPA计算规则表（集中维护，修改此处即可调整评分策略）
+    # ============================================================
+    _RELIABILITY_MAP: Dict[str, float] = {
+        'GOLD_STANDARD':       1.00,
+        'SYSTEMATIC_REVIEW':   0.95,
+        'RCT':                 0.85,
+        'COHORT_CASE_CONTROL': 0.65,
+        'CASE_SERIES':         0.40,
+        'UNCLEAR_BASIC':       0.30,
+    }
+    _TRAP_PENALTY_MAP: Dict[str, float] = {
+        'NO_TRAP':                0.00,
+        'WEAK_SUBGROUP':          0.15,
+        'ANIMAL_MODEL_ONLY':      0.20,
+        'CONTRADICTORY_INTERNAL': 0.20,
+    }
+    _DIRECTION_DEGREE_MAP: Dict[str, float] = {
+        'STRONGLY_SUPPORTS': 1.00,
+        'WEAKLY_SUPPORTS':   0.55,
+        'NEUTRAL':           0.00,
+        'WEAKLY_REFUTES':    0.55,
+        'STRONGLY_REFUTES':  1.00,
+    }
+    _RELEVANCE_SCALE_MAP: Dict[str, float] = {
+        'HIGHLY_RELEVANT':    1.0,
+        'PARTIALLY_RELEVANT': 0.5,
+        'IRRELEVANT':         0.0,
+    }
+
+    def _fuzzy_match_option(self, target: str, frame_of_discernment: List[str]) -> Optional[str]:
+        """
+        将LLM输出的选项名称模糊匹配到FoD已知选项
+        匹配顺序：精确匹配 → 包含匹配 → None
+        """
+        if not target or not frame_of_discernment:
+            return None
+        target_lower = target.lower().strip()
+        # 1. 精确匹配
+        for opt in frame_of_discernment:
+            if opt.lower().strip() == target_lower:
+                return opt
+        # 2. 包含匹配（双向）
+        for opt in frame_of_discernment:
+            if target_lower in opt.lower() or opt.lower() in target_lower:
+                return opt
+        return None
+
+    def compute_bpa_from_tags(
+        self,
+        labels: Dict[str, str],
+        frame_of_discernment: List[str]
+    ) -> Tuple[Dict[str, float], float, float]:
+        """
+        [核心规则引擎] 根据LLM分类标签，通过确定性规则计算BPA值。
+
+        设计原则：LLM只负责分类，Python规则负责量化。彻底分离关注点。
+
+        BPA计算公式：
+            adjusted_reliability = (base_reliability - trap_penalty) × relevance_scale
+            mass_for_option      = adjusted_reliability × degree_of_support
+            uncertainty_theta    = 1.0 - sum(mass_for_options)
+
+        Args:
+            labels: LLM输出的标签字典，包含5个维度
+            frame_of_discernment: FoD选项列表（来自Agent A）
+
+        Returns:
+            (bpa_dict, adjusted_reliability, degree_of_support)
+        """
+        # 初始化BPA（所有FoD选项初始质量为0）
+        bpa: Dict[str, float] = {opt: 0.0 for opt in frame_of_discernment}
+        bpa['uncertainty_theta'] = 0.0
+
+        # ── Step 1: 相关性检查 ──────────────────────────────────
+        relevance = labels.get('relevance', 'IRRELEVANT')
+        relevance_scale = self._RELEVANCE_SCALE_MAP.get(relevance, 0.0)
+        if relevance_scale == 0.0:
+            bpa['uncertainty_theta'] = 1.0
+            return bpa, 0.0, 0.0
+
+        # ── Step 2: 计算调整后的可靠性 ──────────────────────────
+        source_privilege = labels.get('source_privilege', 'EXTERNAL_LITERATURE')
+        if source_privilege == 'GOLD_STANDARD':
+            base_reliability = 1.0
+        else:
+            source_quality = labels.get('source_quality', 'UNCLEAR_BASIC')
+            base_reliability = self._RELIABILITY_MAP.get(source_quality, 0.30)
+
+        trap_key = labels.get('quality_trap', 'NO_TRAP')
+        penalty = self._TRAP_PENALTY_MAP.get(trap_key, 0.0)
+
+        # 综合可靠性 = (base - penalty) × relevance_scale
+        adjusted_reliability = max(0.0, (base_reliability - penalty) * relevance_scale)
+
+        # ── Step 3: 解析方向标签 ────────────────────────────────
+        direction_label = labels.get('evidence_direction', 'NEUTRAL')
+        if direction_label.upper() == 'NEUTRAL':
+            bpa['uncertainty_theta'] = 1.0
+            return bpa, adjusted_reliability, 0.0
+
+        # 解析前缀和目标选项名
+        parsed_prefix: Optional[str] = None
+        parsed_option_name: Optional[str] = None
+        for prefix in ['STRONGLY_SUPPORTS', 'WEAKLY_SUPPORTS', 'STRONGLY_REFUTES', 'WEAKLY_REFUTES']:
+            if direction_label.upper().startswith(prefix + '_'):
+                parsed_prefix = prefix
+                parsed_option_name = direction_label[len(prefix) + 1:]
+                break
+
+        if parsed_prefix is None:
+            # 无法解析方向，保守处理归入uncertainty
+            bpa['uncertainty_theta'] = 1.0
+            return bpa, adjusted_reliability, 0.0
+
+        degree_of_support = self._DIRECTION_DEGREE_MAP[parsed_prefix]
+        mass = adjusted_reliability * degree_of_support
+
+        # ── Step 4: 将mass分配到FoD选项 ──────────────────────────
+        matched_opt = self._fuzzy_match_option(parsed_option_name, frame_of_discernment)
+
+        if 'REFUTES' in parsed_prefix:
+            # 否定某选项 → 将质量均等分配给其余选项
+            opposite_opts = [opt for opt in frame_of_discernment if opt != matched_opt]
+            if opposite_opts and matched_opt is not None:
+                per_mass = mass / len(opposite_opts)
+                for opt in opposite_opts:
+                    bpa[opt] = per_mass
+            else:
+                # 无对立选项时归入uncertainty
+                bpa['uncertainty_theta'] = mass
+        else:
+            # 支持某选项
+            if matched_opt is not None:
+                bpa[matched_opt] = mass
+            else:
+                # 无法匹配任何已知选项，归入uncertainty
+                bpa['uncertainty_theta'] = mass
+
+        # ── Step 5: 计算uncertainty (剩余质量) ────────────────
+        assigned = sum(v for k, v in bpa.items() if k != 'uncertainty_theta')
+        bpa['uncertainty_theta'] = max(0.0, round(1.0 - assigned, 6))
+
+        # 防呆：归一化（防止浮点累积误差超过1.0）
+        total_mass = sum(bpa.values())
+        if total_mass > 1.001:
+            bpa = {k: v / total_mass for k, v in bpa.items()}
+
+        return bpa, adjusted_reliability, degree_of_support
+
     def evaluate_evidence(
-            self, 
-            hypothesis: str, 
-            evidence_content: str, 
+            self,
+            hypothesis: str,
+            evidence_content: str,
             evidence_analysis: Dict[str, Any],
             evidence_type: str = "Unknown",
-            question_pico: Dict[str, str] = None
+            question_pico: Dict[str, str] = None,
+            frame_of_discernment: List[str] = None
             ) -> Dict[str, Any]:
         """
-        评估单个证据片段
+        [重构版] 评估单个证据片段
+
+        流程：
+          1. 调用LLM → 获取5维分类标签（不再让LLM计算数字）
+          2. 调用 compute_bpa_from_tags → 规则引擎计算BPA（确定性、可溯源）
+          3. 组装下游期望的标准字段
         """
-        # 1. 构造增强型证据描述 (原始文本 + 分析摘要)
+        # 1. 构造增强型证据描述 (原始文本 + Agent B结构化分析)
         rich_evidence_text = self._format_evidence_for_prompt(evidence_content, evidence_analysis, evidence_type)
-        # print(f"构建好的证据描述文本为:\n{rich_evidence_text}\n")
-        # 2. [准备数据] 格式化问题的 PICO
         question_pico_str = self._format_question_pico(question_pico)
-        # 2. 替换Prompt
-        # 注意：这里假设 Prompt_C 中有一个 {{EVIDENCE_TEXT}} 占位符
-        # 建议 Prompt_C 的相关部分写成： "Here is the evidence (including content and pre-analysis): \n {{EVIDENCE_TEXT}}"
-        prompt = Prompt_C.replace("{{HYPOTHESIS}}", hypothesis)
+
+        # 2. 默认FoD
+        if not frame_of_discernment:
+            frame_of_discernment = ['SUPPORT', 'REFUTE']
+
+        # 3. 构建Prompt并调用LLM（LLM只需输出分类标签）
+        prompt = Prompt_C_Optimized.replace("{{HYPOTHESIS}}", hypothesis)
         prompt = prompt.replace("{{EVIDENCE_TEXT}}", rich_evidence_text)
         prompt = prompt.replace("{{QUESTION_PICO}}", question_pico_str)
-        
-        # 3. 调用 LLM
+
         response = self._call_llm_api(prompt)
-        
+
         try:
             result = extract_json_from_response(response)
-            
             if result is None:
                 raise ValueError("JSON Extraction failed")
 
-            # 4. 验证和计算BPA
-            nli = result.get('nli_analysis', {})
-            
-            # --- [核心修改开始] ---
-            # 优化可靠性获取逻辑：移除基于关键词的激进兜底，改为保守兜底
-            llm_reliability = result.get('reliability_assessment', {}).get('adjusted_reliability')
-            
-            if llm_reliability is not None:
-                # 情况A: 模型成功返回了可靠性 -> 使用模型的值
-                final_reliability = float(llm_reliability)
-            else:
-                # 情况B: 模型未返回可靠性 -> 使用保守的默认值
-                # 不再去判断 'meta' 或 'review'，因为我们不知道它是否相关。
-                # 如果模型没给分，说明模型可能困惑或解析失败，此时不能给高分。
-                # 给一个中性的低分，避免产生高分噪声。
-                print(f"[Warning] Evidence {evidence_type} missing reliability score. Using default 0.4.")
-                final_reliability = 0.4 
-            # --- [核心修改结束] ---
-            
-            calculated_bpa = self.calculate_bpa(
-                nli.get('entailment_score', 0),
-                nli.get('contradiction_score', 0),
-                nli.get('neutral_score', 0),
-                final_reliability
+            labels = result.get('labels', {})
+
+            # 4. Python规则引擎计算BPA（完全确定性，不依赖LLM数字输出）
+            bpa_dist, adjusted_reliability, degree_of_support = self.compute_bpa_from_tags(
+                labels, frame_of_discernment
             )
-            
-            result['bpa_components'] = calculated_bpa
-            
-            # 生成给生成模型的文本 (保持不变)
-            generator_text = self._format_result_for_generator(evidence_content, result)
-            result['content_for_generator'] = generator_text
-            
-            # 保留调试信息 (保持不变)
-            result['processed_input_snippet'] = rich_evidence_text[:200] + "..." 
-            
+
+            # 5. 将细粒度BPA分布折叠为下游期望的3键格式
+            #    折叠依据：evidence_direction 标签的语义方向（SUPPORTS / REFUTES），
+            #    而非质量大小排序（按大小排会把 REFUTE=1.0 错误映射为 support_hypothesis）。
+            #
+            #    语义规则：
+            #      - direction 含 SUPPORTS → 该质量代表"支持假设"→ m_support
+            #      - direction 含 REFUTES  → 该质量代表"反驳假设"→ m_refute
+            #      - NEUTRAL                → 全部归入不确定性，已在 compute_bpa_from_tags 处理
+            fod_masses = {k: v for k, v in bpa_dist.items() if k != 'uncertainty_theta'}
+            m_uncertainty = bpa_dist.get('uncertainty_theta', 1.0)
+            total_fod_mass = sum(fod_masses.values())
+
+            direction_upper = labels.get('evidence_direction', 'NEUTRAL').upper()
+            if 'REFUTES' in direction_upper:
+                # 证据是反驳方向：所有 FoD 质量归入 against_hypothesis
+                m_support = 0.0
+                m_refute  = total_fod_mass
+            elif 'SUPPORTS' in direction_upper:
+                # 证据是支持方向：所有 FoD 质量归入 support_hypothesis
+                m_support = total_fod_mass
+                m_refute  = 0.0
+            else:
+                # NEUTRAL 或无法解析：质量应已全在 uncertainty_theta，FoD 质量为 0
+                m_support = 0.0
+                m_refute  = 0.0
+
+            # 6. 写入结果字典
+            result['metrics'] = {
+                'adjusted_reliability_W': round(adjusted_reliability, 4),
+                'degree_of_support_D':    round(degree_of_support, 4),
+            }
+            result['bpa_distribution'] = {k: round(v, 4) for k, v in bpa_dist.items()}
+            result['bpa_components'] = {
+                "support_hypothesis": round(m_support, 4),
+                "against_hypothesis": round(m_refute, 4),
+                "uncertainty":        round(m_uncertainty, 4),
+            }
+
+            # 7. 生成给生成模型的文本
+            result['content_for_generator'] = self._format_result_for_generator(evidence_content, result)
+            result['processed_input_snippet'] = rich_evidence_text[:200] + "..."
+
             return result
-            
+
         except Exception as e:
-            print(f"评估失败: {e}")
+            print(f"[Agent C] 评估失败: {e}")
             return {"error": str(e)}
     
     def evaluate_evidence_batch(
@@ -505,43 +750,46 @@ class AgentC:
         hypothesis: str,
         agent_b_result: Dict[str, Any],
         question_pico: Dict[str, str] = None,
+        frame_of_discernment: List[str] = None,
     ) -> List[Dict[str, Any]]:
         """
-        批量评估多个证据 - 适配新的JSON结构
+        批量评估多个证据 - 适配重构后的标签分类体系
+
+        Args:
+            hypothesis: 假设命题字符串（含问题和FoD描述）
+            agent_b_result: Agent B 的输出结构（analyzed_evidences列表）
+            question_pico: Agent A 提取的PICO字典
+            frame_of_discernment: FoD选项列表，传给规则引擎BPA计算
         """
         results = []
-        
-        # 1. 解析 Agent B 的结果结构
+
         # 兼容处理：既支持直接传 list，也支持传包含 analyzed_evidences 的 dict
         if isinstance(agent_b_result, dict):
             evidence_list = agent_b_result.get('analyzed_evidences', [])
-            # total_count = agent_b_result.get('evidence_count', 0)
         elif isinstance(agent_b_result, list):
             evidence_list = agent_b_result
         else:
             print("Error: agent_b_result 格式错误")
             return []
 
-        # print(f"[智能体C] 收到 {len(evidence_list)} 条证据待评估 (总计: {total_count})")
-
         for item in evidence_list:
             ev_id = item.get('evidence_id')
+            # 优先读取顶层 source_type（原始来源类型，如 user_context），
+            # 而非 analysis.study_design（Agent B 推断的研究类型），两者含义不同。
+            # 旧代码错误使用 item.get('study_design') 该字段不在顶层，永远 fallback 到 Unknown
             source_type = item.get('source_type', 'Unknown')
             original_content = item.get('original_content', '')
-            analysis_data = item.get('analysis', {}) # 获取 Agent B 的分析数据
-            
-            # print(f"正在评估证据 #{ev_id} ({source_type})...")
-            
-            # 只有当内容有效时才评估
+            analysis_data = item.get('analysis', {})
+
             if original_content or analysis_data:
                 evaluation = self.evaluate_evidence(
-                    hypothesis=hypothesis, 
-                    evidence_content=original_content[:2000000], # 依然限制长度
-                    evidence_analysis=analysis_data,          # 传入分析数据
+                    hypothesis=hypothesis,
+                    evidence_content=original_content[:2000000],
+                    evidence_analysis=analysis_data,
                     evidence_type=source_type,
-                    question_pico=question_pico
+                    question_pico=question_pico,
+                    frame_of_discernment=frame_of_discernment,
                 )
-                
                 results.append({
                     "evidence_id": ev_id,
                     "source_type": source_type,
@@ -553,42 +801,51 @@ class AgentC:
                     "evidence_id": ev_id,
                     "error": "Empty content"
                 })
-        
         return results
     
     def run(
-        self, 
-        hypothesis: str, 
-        agent_b_result: Dict[str, Any], 
+        self,
+        hypothesis: str,
+        agent_b_result: Dict[str, Any],
         question_pico: Dict[str, str] = None,
+        frame_of_discernment: List[str] = None,
         verbose: bool = False
     ) -> Dict[str, Any]:
         """
-        运行智能体C
+        运行智能体C（重构版）
+
+        Args:
+            hypothesis: 问题+FoD描述字符串
+            agent_b_result: Agent B 输出
+            question_pico: Agent A 提取的PICO
+            frame_of_discernment: FoD选项列表，供规则引擎精确分配BPA
+            verbose: 是否打印调试信息
         """
         if verbose:
             print(f"\n{'='*60}")
-            print(f"[智能体C] 开始D-S证据评估")
+            print(f"[智能体C] 开始D-S证据评估（标签驱动模式）")
             print(f"{'='*60}")
             print(f"假设命题: {hypothesis}")
-        
-        # 传入完整的 agent_b_result
-        evaluations = self.evaluate_evidence_batch(hypothesis, agent_b_result, question_pico)
-        
+            if frame_of_discernment:
+                print(f"识别框架: {frame_of_discernment}")
+
+        evaluations = self.evaluate_evidence_batch(
+            hypothesis, agent_b_result, question_pico, frame_of_discernment
+        )
+
         # 收集所有有效的BPA
         valid_bpas = []
         for ev in evaluations:
             if 'evaluation' in ev and 'bpa_components' in ev['evaluation']:
-                bpa = ev['evaluation']['bpa_components']
                 if not ev['evaluation'].get('error'):
-                    valid_bpas.append(bpa)
-        
+                    valid_bpas.append(ev['evaluation']['bpa_components'])
+
         if verbose:
             print(f"\n[智能体C] 评估完成，有效BPA: {len(valid_bpas)}")
             if valid_bpas:
                 avg_support = sum(b['support_hypothesis'] for b in valid_bpas) / len(valid_bpas)
                 print(f"BPA均值 -> 支持: {avg_support:.4f}")
-        
+
         return {
             "hypothesis": hypothesis,
             "evaluations": evaluations,
@@ -598,81 +855,18 @@ class AgentC:
 
 class AgentD:
     """
-    智能体D - 多证据融合与推理智能体
-    功能：使用D-S理论融合多个BPA，处理冲突，执行链式推理
+    智能体D - 纯数学多证据融合引擎
+    功能：严格按照 Dempster-Shafer 理论执行 BPA 融合、冲突处理及置信度计算。
+    无需调用大语言模型，完全消除推理幻觉。
     """
     
     def __init__(self):
-        """初始化智能体D，加载配置"""
-        self.args = set_argument()
-        
-    def _call_llm_api(self, prompt: str, temperature: float = 0.3) -> str:
-        """
-        调用LLM（统一接口）
-        """
-        return call_llm(prompt, temperature=temperature, max_tokens=2000)
-    
-    def _format_evaluations_for_llm(self, evaluations: List[Dict[str, Any]]) -> str:
-        """
-        [Helper] 将 Agent C 的评估列表格式化为 LLM 易读的字符串
-        """
-        formatted_text = ""
-        for ev in evaluations:
-            ev_data = ev.get('evaluation', {})
-            bpa = ev_data.get('bpa_components', {})
-            # 提取 Agent C 生成的内容摘要
-            content = ev_data.get('content_for_generator', 'No content summary available.')
-            
-            formatted_text += f"""
---- Evidence ID: {ev.get('evidence_id')} (Type: {ev.get('source_type')}) ---
-[Agent C Score]: Support={bpa.get('support_hypothesis', 0):.2f}, Reliability={ev_data.get('reliability_assessment', {}).get('adjusted_reliability', 0):.2f}
-[Content Analysis]:
-{content}
-------------------------------------------------------------
-"""
-        return formatted_text
+        """初始化智能体D"""
+        pass # 如果有本地配置可以保留 self.args = set_argument()
 
-    def analyze_competition_and_decide(
-        self,
-        question: str,
-        fod: List[str],
-        evaluations: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """
-        [核心方法] 调用 LLM 进行竞争性假设评估和最终决策
-        """
-        # 1. 准备 Prompt 输入
-        evals_text = self._format_evaluations_for_llm(evaluations)
-        
-        prompt = Prompt_D.replace("{{QUESTION}}", question)
-        prompt = prompt.replace("{{FOD}}", str(fod))
-        prompt = prompt.replace("{{EVALUATIONS_LIST}}", evals_text)
-        
-        # 2. 调用 LLM
-        print("[智能体D] 正在进行竞争性假设评估 (LLM Reasoning)...")
-        response = self._call_llm_api(prompt)
-        
-        # 3. 解析结果
-        result = extract_json_from_response(response)
-        if result is None:
-            print(f"JSON解析失败，原始响应: {response[:500]}...")
-            return {
-                "error": "解析失败", 
-                "raw_response": response,
-                "final_decision": {"decision": "UNCERTAIN", "confidence": 0.0, "reason": "LLM解析失败"}
-            }
-            
-        return result
-
+    # 核心数学计算部分 (保持原样，纯 Python 逻辑)
     def calculate_conflict_coefficient(self, bpa1: Dict[str, float], bpa2: Dict[str, float]) -> float:
-        """
-        计算两个BPA之间的冲突系数K
-        
-        K = Σ m1(A) × m2(B) for all A∩B = ∅
-        
-        对于识别框架 Θ = {H, ¬H, Θ}:
-        K = m1(H) × m2(¬H) + m1(¬H) × m2(H)
-        """
+        """计算两个BPA之间的冲突系数K"""
         m1_h = bpa1.get('support_hypothesis', 0)
         m1_nh = bpa1.get('against_hypothesis', 0)
         m2_h = bpa2.get('support_hypothesis', 0)
@@ -682,32 +876,16 @@ class AgentD:
         return round(K, 4)
     
     def dempster_combine(self, bpa1: Dict[str, float], bpa2: Dict[str, float]) -> Dict[str, float]:
-        """
-        Dempster组合规则
-        
-        m(A) = [Σ m1(X) × m2(Y) for X∩Y=A] / (1 - K)
-        """
+        """Dempster组合规则"""
         K = self.calculate_conflict_coefficient(bpa1, bpa2)
         
         if K >= 1.0:
-            # 完全冲突，无法融合
-            return {
-                "support_hypothesis": 0.0,
-                "against_hypothesis": 0.0,
-                "uncertainty": 1.0
-            }
+            return {"support_hypothesis": 0.0, "against_hypothesis": 0.0, "uncertainty": 1.0}
         
-        m1_h = bpa1.get('support_hypothesis', 0)
-        m1_nh = bpa1.get('against_hypothesis', 0)
-        m1_u = bpa1.get('uncertainty', 0)
+        m1_h, m1_nh, m1_u = bpa1.get('support_hypothesis', 0), bpa1.get('against_hypothesis', 0), bpa1.get('uncertainty', 0)
+        m2_h, m2_nh, m2_u = bpa2.get('support_hypothesis', 0), bpa2.get('against_hypothesis', 0), bpa2.get('uncertainty', 0)
         
-        m2_h = bpa2.get('support_hypothesis', 0)
-        m2_nh = bpa2.get('against_hypothesis', 0)
-        m2_u = bpa2.get('uncertainty', 0)
-        
-        # 计算组合后的BPA
         norm_factor = 1.0 - K
-        
         m_h = (m1_h * m2_h + m1_h * m2_u + m1_u * m2_h) / norm_factor
         m_nh = (m1_nh * m2_nh + m1_nh * m2_u + m1_u * m2_nh) / norm_factor
         m_u = (m1_u * m2_u) / norm_factor
@@ -719,173 +897,42 @@ class AgentD:
         }
     
     def murphy_average_combine(self, bpa_list: List[Dict[str, float]]) -> Dict[str, float]:
-        """
-        Murphy平均组合规则（适用于高冲突场景）
-        
-        步骤：
-        1. 对所有BPA求平均得到 m_avg
-        2. 将 m_avg 自融合 n 次
-        """
+        """Murphy平均组合规则（适用于高冲突场景）"""
         if not bpa_list:
             return {"support_hypothesis": 0.0, "against_hypothesis": 0.0, "uncertainty": 1.0}
         
         n = len(bpa_list)
-        
-        # 步骤1: 计算平均BPA
         avg_h = sum(b.get('support_hypothesis', 0) for b in bpa_list) / n
         avg_nh = sum(b.get('against_hypothesis', 0) for b in bpa_list) / n
         avg_u = sum(b.get('uncertainty', 0) for b in bpa_list) / n
         
-        m_avg = {
-            "support_hypothesis": avg_h,
-            "against_hypothesis": avg_nh,
-            "uncertainty": avg_u
-        }
+        m_avg = {"support_hypothesis": avg_h, "against_hypothesis": avg_nh, "uncertainty": avg_u}
         
-        # 步骤2: 自融合 n 次
         result = m_avg
         for _ in range(n - 1):
             result = self.dempster_combine(result, m_avg)
-        
         return result
-    
-    def analyze_reasoning_strategy(
-        self,
-        question: str,
-        fod: List[str],
-        bpa_list: List[Dict[str, float]]
-    ) -> Dict[str, Any]:
-        """
-        使用LLM分析推理策略和证据关系
-        """
-        # 构建prompt
-        prompt = Prompt_D.replace("{{FRAME_OF_DISCERNMENT}}", str(fod))
-        prompt = prompt.replace("{{BPA_LIST}}", json.dumps(bpa_list, indent=2))
-        prompt = prompt.replace("{{QUESTION_CONTEXT}}", question)
-        
-        # 调用LLM
-        response = self._call_llm_api(prompt)
-        
-        # 解析JSON（使用健壮版本）
-        result = extract_json_from_response(response)
-        if result is not None:
-            return result
-        else:
-            print(f"JSON解析失败，原始响应: {response[:500]}...")
-            return {"error": "解析失败", "raw_response": response}
-    
-    def fuse_evidence(
-        self,
-        bpa_list: List[Dict[str, float]],
-        strategy: str = "auto"
-    ) -> Dict[str, Any]:
-        """
-        融合多个证据的BPA
-        
-        Args:
-            bpa_list: BPA列表
-            strategy: 融合策略 ('auto', 'dempster', 'murphy')
-        
-        Returns:
-            融合结果
-        """
-        if not bpa_list:
-            return {
-                "fused_bpa": {"support_hypothesis": 0.0, "against_hypothesis": 0.0, "uncertainty": 1.0},
-                "method": "none",
-                "conflict_coefficient": 0.0
-            }
-        
-        if len(bpa_list) == 1:
-            return {
-                "fused_bpa": bpa_list[0],
-                "method": "single",
-                "conflict_coefficient": 0.0
-            }
-        
-        # 计算平均冲突系数
-        conflicts = []
-        for i in range(len(bpa_list) - 1):
-            K = self.calculate_conflict_coefficient(bpa_list[i], bpa_list[i + 1])
-            conflicts.append(K)
-        
-        avg_conflict = sum(conflicts) / len(conflicts) if conflicts else 0.0
-        
-        # 自动选择策略
-        if strategy == "auto":
-            if avg_conflict < 0.3:
-                strategy = "dempster"
-            else:
-                strategy = "murphy"
-        
-        # 执行融合
-        if strategy == "dempster":
-            result = bpa_list[0]
-            for bpa in bpa_list[1:]:
-                result = self.dempster_combine(result, bpa)
-            method = "Dempster组合规则"
-        else:  # murphy
-            result = self.murphy_average_combine(bpa_list)
-            method = "Murphy平均规则"
-        
-        return {
-            "fused_bpa": result,
-            "method": method,
-            "strategy": strategy,
-            "conflict_coefficient": round(avg_conflict, 4),
-            "evidence_count": len(bpa_list)
-        }
-    
-    def calculate_belief_plausibility(
-        self,
-        fused_bpa: Dict[str, float],
-        fod: List[str]
-    ) -> Dict[str, Any]:
-        """
-        计算每个命题的信念度(Belief)和似真度(Plausibility)
-        
-        Bel(A) = m(A)
-        Pl(A) = 1 - m(¬A)
-        """
+
+    def calculate_belief_plausibility(self, fused_bpa: Dict[str, float]) -> Dict[str, Any]:
+        """计算信念度(Belief)和似真度(Plausibility)"""
         m_h = fused_bpa.get('support_hypothesis', 0)
         m_nh = fused_bpa.get('against_hypothesis', 0)
-        m_u = fused_bpa.get('uncertainty', 0)
-        
-        # 对于第一个假设（通常是肯定答案）
-        bel_h = m_h
-        pl_h = 1.0 - m_nh
-        
-        # 对于否定假设
-        bel_nh = m_nh
-        pl_nh = 1.0 - m_h
         
         return {
             "hypothesis_positive": {
-                "belief": round(bel_h, 4),
-                "plausibility": round(pl_h, 4),
-                "uncertainty_interval": round(pl_h - bel_h, 4)
+                "belief": round(m_h, 4),
+                "plausibility": round(1.0 - m_nh, 4),
+                "uncertainty_interval": round((1.0 - m_nh) - m_h, 4)
             },
             "hypothesis_negative": {
-                "belief": round(bel_nh, 4),
-                "plausibility": round(pl_nh, 4),
-                "uncertainty_interval": round(pl_nh - bel_nh, 4)
+                "belief": round(m_nh, 4),
+                "plausibility": round(1.0 - m_h, 4),
+                "uncertainty_interval": round((1.0 - m_h) - m_nh, 4)
             }
         }
-    
-    def make_decision(
-        self,
-        belief_pl: Dict[str, Any],
-        threshold: float = 0.6  # 保持默认绝对阈值
-    ) -> Dict[str, Any]:
-        """
-        基于信念度做出决策 (引入相对优势逻辑)
-        
-        策略：
-        1. 绝对优势：任意一方 Belief >= threshold (默认0.6) -> 直接决策
-        2. 相对优势：
-           如果 Max(Bel) > 0.5 且 (Max(Bel) - Min(Bel)) > 0.3 -> 决策
-           (解释：虽然没到0.6，但一方明显压倒另一方，且自身过半)
-        """
+
+    def make_decision(self, belief_pl: Dict[str, Any], threshold: float = 0.6) -> Dict[str, Any]:
+        """基于数值的硬逻辑决策"""
         bel_pos = belief_pl['hypothesis_positive']['belief']
         bel_neg = belief_pl['hypothesis_negative']['belief']
         
@@ -893,216 +940,108 @@ class AgentD:
         confidence = 0.0
         reason = ""
 
-        # 1. 绝对优势判定
         if bel_pos >= threshold:
-            decision = "YES"
-            confidence = bel_pos
-            reason = f"正向信念度 {bel_pos:.4f} 超过绝对阈值 {threshold}"
+            decision, confidence, reason = "YES", bel_pos, f"正向信念度 {bel_pos:.4f} 超过绝对阈值 {threshold}"
         elif bel_neg >= threshold:
-            decision = "NO"
-            confidence = bel_neg
-            reason = f"负向信念度 {bel_neg:.4f} 超过绝对阈值 {threshold}"
-            
-        # 2. 相对优势判定 (补救措施)
-        elif decision == "UNCERTAIN":
+            decision, confidence, reason = "NO", bel_neg, f"负向信念度 {bel_neg:.4f} 超过绝对阈值 {threshold}"
+        else:
             diff = abs(bel_pos - bel_neg)
-            relative_threshold = 0.3 # 相对差距阈值
-            min_absolute_support = 0.45 # 最低绝对支持度（稍微降低要求）
-
-            if bel_pos > bel_neg and bel_pos > min_absolute_support and diff > relative_threshold:
-                decision = "YES"
-                confidence = bel_pos
-                reason = f"正向信念度虽未达绝对阈值，但具有显著相对优势 (差值 {diff:.4f} > {relative_threshold})"
-            elif bel_neg > bel_pos and bel_neg > min_absolute_support and diff > relative_threshold:
-                decision = "NO"
-                confidence = bel_neg
-                reason = f"负向信念度虽未达绝对阈值，但具有显著相对优势 (差值 {diff:.4f} > {relative_threshold})"
+            if bel_pos > bel_neg and bel_pos > 0.45 and diff > 0.3:
+                decision, confidence, reason = "YES", bel_pos, f"未达绝对阈值，但具显著正向优势 (差值 {diff:.4f})"
+            elif bel_neg > bel_pos and bel_neg > 0.45 and diff > 0.3:
+                decision, confidence, reason = "NO", bel_neg, f"未达绝对阈值，但具显著负向优势 (差值 {diff:.4f})"
             else:
-                # 确实是不确定
                 confidence = max(bel_pos, bel_neg)
-                reason = f"信念度不足且无显著相对优势（正向:{bel_pos:.4f}, 负向:{bel_neg:.4f}）"
+                reason = f"证据不足或存在严重冲突（正向:{bel_pos:.4f}, 负向:{bel_neg:.4f}）"
         
-        return {
-            "decision": decision,
-            "confidence": round(confidence, 4),
-            "reason": reason
-        }
-    
-    def run(
-        self,
-        question: str,
-        fod: List[str],
-        bpa_list: List[Dict[str, float]],
-        verbose: bool = False
-    ) -> Dict[str, Any]:
+        return {"decision": decision, "confidence": round(confidence, 4), "reason": reason}
+
+    # 流程控制与生成指引 (替代 LLM)
+    def fuse_evidence(self, bpa_list: List[Dict[str, float]]) -> Dict[str, Any]:
+        """智能融合路由：计算平均冲突，自动选择策略"""
+        if not bpa_list:
+            return {"fused_bpa": {"support_hypothesis": 0.0, "against_hypothesis": 0.0, "uncertainty": 1.0}, "method": "none", "conflict_coefficient": 0.0}
+        if len(bpa_list) == 1:
+            return {"fused_bpa": bpa_list[0], "method": "single", "conflict_coefficient": 0.0}
+        
+        # 计算全局平均冲突系数 K
+        conflicts = [self.calculate_conflict_coefficient(bpa_list[i], bpa_list[i + 1]) for i in range(len(bpa_list) - 1)]
+        avg_conflict = sum(conflicts) / len(conflicts) if conflicts else 0.0
+        
+        # 纯规则路由：K<0.3 用 Dempster，否则用 Murphy
+        strategy = "dempster" if avg_conflict < 0.3 else "murphy"
+        
+        if strategy == "dempster":
+            result = bpa_list[0]
+            for bpa in bpa_list[1:]:
+                result = self.dempster_combine(result, bpa)
+            method_desc = "Dempster组合规则 (由于证据表现出低冲突、高一致性)"
+        else:
+            result = self.murphy_average_combine(bpa_list)
+            method_desc = "Murphy平均规则 (由于检测到证据间存在高冲突)"
+            
+        return {"fused_bpa": result, "method": method_desc, "strategy": strategy, "conflict_coefficient": round(avg_conflict, 4)}
+
+    def generate_generation_guidance(self, k: float, bel_pl: Dict[str, Any], decision: str) -> str:
         """
-        运行智能体D - 完整的多证据融合与推理
-        
-        Args:
-            question: 原始问题
-            fod: 识别框架
-            bpa_list: BPA列表
-            verbose: 是否打印详细信息
-        
-        Returns:
-            融合结果和决策
+        [核心新增] 将枯燥的数学指标转化为给 Agent E (生成模型) 的强制执行指令。
         """
+        guidance_lines = []
+        
+        # 1. 解析冲突态势 (K)
+        if k >= 0.4:
+            guidance_lines.append(f"- 【高冲突警示】冲突系数高达 {k:.2f}。**必须**在回答中明确指出学术界存在严重争议，并使用对比结构（一方面...另一方面...）展现双方观点。")
+        elif k <= 0.2:
+            guidance_lines.append(f"- 【高一致性】冲突系数极低 ({k:.2f})。证据方向统一，请直接综合陈述，无需刻意营造争议。")
+
+        # 2. 解析置信度 (Bel)
+        confidence = bel_pl['hypothesis_positive']['belief'] if decision == "YES" else bel_pl['hypothesis_negative']['belief']
+        if decision in ["YES", "NO"]:
+            if confidence >= 0.7:
+                guidance_lines.append(f"- 【语气定调】统计学信度极高 (Belief={confidence:.2f})。请以非常笃定、坚决的语气给出结论。")
+            else:
+                guidance_lines.append(f"- 【语气定调】有一定统计学信度 (Belief={confidence:.2f})。请使用倾向性但保守的语气（例如：目前较多证据倾向于表明...）。")
+        else:
+            guidance_lines.append("- 【语气定调】无法得出确定结论。请以客观中立的语气解释为何目前无法得出绝对结论。")
+
+        # 3. 解析无知程度 (Pl - Bel)
+        uncertainty = bel_pl['hypothesis_positive']['uncertainty_interval'] if decision == "YES" else bel_pl['hypothesis_negative']['uncertainty_interval']
+        if decision == "UNCERTAIN" and uncertainty > 0.4:
+            guidance_lines.append("- 【不确定性声明】系统检测到极高的知识真空（证据极度匮乏或质量极低）。**必须**在结尾补充：'目前相关研究极度匮乏，需要更多高质量临床试验来验证'。")
+
+        return "\n".join(guidance_lines)
+
+    def run(self, question: str, fod: List[str], bpa_list: List[Dict[str, float]], verbose: bool = False) -> Dict[str, Any]:
+        """运行纯数学引擎的完整流程"""
         if verbose:
-            print(f"\n{'='*60}")
-            print(f"[智能体D] 开始多证据融合与推理")
-            print(f"{'='*60}")
-            print(f"问题: {question}")
-            print(f"识别框架: {fod}")
-            print(f"证据BPA数量: {len(bpa_list)}")
+            print(f"\n{'='*40}\n[智能体D] 纯数学融合引擎启动\n{'='*40}")
         
-        # 步骤1: 使用LLM分析推理策略
-        print("\n[步骤1] 分析证据关系和推理策略...")
-        reasoning_analysis = self.analyze_reasoning_strategy(question, fod, bpa_list)
+        # 步骤1: 纯数学融合与冲突计算
+        fusion_result = self.fuse_evidence(bpa_list)
         
-        recommended_strategy = reasoning_analysis.get('fusion_strategy', {}).get('primary_method', 'auto')
-        if verbose:
-            print(f"✅ 推荐融合策略: {recommended_strategy}")
-            conflict_level = reasoning_analysis.get('conflict_analysis', {}).get('conflict_level', 'unknown')
-            print(f"✅ 冲突程度: {conflict_level}")
+        # 步骤2: 计算信念度和似真度
+        belief_pl = self.calculate_belief_plausibility(fusion_result['fused_bpa'])
         
-        # 步骤2: 执行BPA融合
-        print("\n[步骤2] 执行BPA融合...")
-        fusion_result = self.fuse_evidence(bpa_list, strategy=recommended_strategy)
-        if verbose:
-            print(f"✅ 使用方法: {fusion_result['method']}")
-            print(f"✅ 冲突系数: {fusion_result['conflict_coefficient']}")
-            fused = fusion_result['fused_bpa']
-            print(f"\n融合后的BPA:")
-            print(f"  支持假设: {fused['support_hypothesis']:.4f}")
-            print(f"  反对假设: {fused['against_hypothesis']:.4f}")
-            print(f"  不确定性: {fused['uncertainty']:.4f}")
-        
-        # # 步骤3: 计算信念度和似真度
-        print("\n[步骤3] 计算信念度和似真度...")
-        belief_pl = self.calculate_belief_plausibility(fusion_result['fused_bpa'], fod)
-        if verbose:
-            pos = belief_pl['hypothesis_positive']
-            neg = belief_pl['hypothesis_negative']
-            print(f"\n正向假设:")
-            print(f"  信念度(Belief): {pos['belief']:.4f}")
-            print(f"  似真度(Plausibility): {pos['plausibility']:.4f}")
-            print(f"  不确定区间: [{pos['belief']:.4f}, {pos['plausibility']:.4f}]")
-            print(f"\n负向假设:")
-            print(f"  信念度(Belief): {neg['belief']:.4f}")
-            print(f"  似真度(Plausibility): {neg['plausibility']:.4f}")
-        
-        # # 步骤4: 做出决策
-        print("\n[步骤4] 做出最终决策...")
+        # 步骤3: 执行硬逻辑决策
         decision = self.make_decision(belief_pl)
-        if verbose:
-            print(f"\n{'='*60}")
-            print(f"最终决策: {decision['decision']}")
-            print(f"置信度: {decision['confidence']:.4f}")
-            print(f"理由: {decision['reason']}")
-            print(f"{'='*60}")
         
+        # 步骤4: 生成供下游 Agent E 使用的提示词指令
+        k_value = fusion_result['conflict_coefficient']
+        generation_guidance = self.generate_generation_guidance(k_value, belief_pl, decision['decision'])
+        
+        if verbose:
+            print(f"✅ 最终决策: {decision['decision']} (置信度: {decision['confidence']:.4f})")
+            print(f"✅ K 值: {k_value} | 策略: {fusion_result['strategy']}")
+            print(f"✅ 已生成下游生成指令。")
+
         return {
             "question": question,
             "frame_of_discernment": fod,
-            "reasoning_analysis": reasoning_analysis,
             "fusion_result": fusion_result,
             "belief_plausibility": belief_pl,
-            "final_decision": decision
+            "final_decision": decision,
+            "generation_guidance_for_LLM": generation_guidance # 这是喂给最终大模型的最重要的一段话！
         }
-
-
-    # def run(
-    #     self,
-    #     question: str,
-    #     fod: List[str],
-    #     evaluations: List[Dict[str, Any]], # 注意：这里类型变了，不再是 bpa_list
-    #     verbose: bool = True
-    # ) -> Dict[str, Any]:
-    #     """
-    #     运行智能体D - 完整流程
-    #     """
-    #     if verbose:
-    #         print(f"\n{'='*60}")
-    #         print(f"[智能体D] 开始多证据融合与裁决")
-    #         print(f"{'='*60}")
-    #         print(f"识别框架 (FoD): {fod}")
-    #         print(f"输入证据数量: {len(evaluations)}")
-        
-    #     # ------------------------------------------------------------------
-    #     # 核心逻辑：直接让 LLM 裁判进行“竞争性评估”
-    #     # 不再在 Python 里跑复杂的 Dempster 公式，因为分组逻辑太依赖语义理解
-    #     # ------------------------------------------------------------------
-        
-    #     llm_decision_result = self.analyze_competition_and_decide(question, fod, evaluations)
-        
-    #     # 提取关键信息用于后续流程
-    #     final_decision = llm_decision_result.get('final_decision', {})
-    #     mapping = llm_decision_result.get('mapping_analysis', {})
-    #     conflict = llm_decision_result.get('conflict_analysis', {})
-        
-    #     if verbose:
-    #         print(f"\n[智能体D] 裁决完成")
-    #         print(f"✅ 最终决策: {final_decision.get('decision')}")
-    #         print(f"✅ 置信度: {final_decision.get('confidence')}")
-    #         print(f"✅ 理由: {final_decision.get('reason')}")
-    #         print(f"✅ 冲突状态: {conflict.get('conflict_level')}")
-            
-    #         # 打印映射关系（调试用）
-    #         print(f"\n[证据分组情况]:")
-    #         dist = mapping.get('evidence_distribution', {})
-    #         for opt, ids in dist.items():
-    #             print(f"  - {opt}: {ids}")
-
-    #     # 构造返回结构，保持与下游 Agent E 的兼容性
-    #     # 注意：这里我们构造一个虚拟的 'fusion_result' 和 'belief_plausibility'
-    #     # 因为 LLM 已经直接给出了最终的 confidence，反推这些数值即可
-        
-    #     confidence = final_decision.get('confidence', 0.0)
-        
-    #     # 构造虚拟的融合结果 (适配 main.py 接口)
-    #     fusion_result_mock = {
-    #         "fused_bpa": {
-    #             "support_hypothesis": confidence,
-    #             "against_hypothesis": 0.0,
-    #             "uncertainty": 1.0 - confidence
-    #         },
-    #         "method": "LLM_Competitive_Reasoning", # 标记这是 LLM 裁决的
-    #         "conflict_coefficient": 0.0, # 暂时置0，或从 LLM 读取
-    #         "evidence_count": len(evaluations)
-    #     }
-        
-    #     belief_pl_mock = {
-    #         "hypothesis_positive": {
-    #             "belief": confidence,
-    #             "plausibility": 1.0, 
-    #             "uncertainty_interval": 1.0 - confidence
-    #         },
-    #         "hypothesis_negative": {
-    #             "belief": 0.0,
-    #             "plausibility": 1.0 - confidence,
-    #             "uncertainty_interval": 1.0 - confidence
-    #         }
-    #     }
-
-    #     return {
-    #         "question": question,
-    #         "frame_of_discernment": fod,
-    #         # 直接透传 LLM 的分析结果
-    #         "reasoning_analysis": {
-    #             "conflict_analysis": conflict,
-    #             "reasoning_chains": llm_decision_result.get('reasoning_chains', []),
-    #             "reasoning_explanation": {
-    #                  "overall_reasoning_path": final_decision.get('reason'),
-    #                  "key_supporting_evidence": mapping.get('evidence_distribution', {}).get(mapping.get('dominant_option'), [])
-    #             }
-    #         },
-    #         "fusion_result": fusion_result_mock,
-    #         "belief_plausibility": belief_pl_mock,
-    #         "final_decision": final_decision,
-            
-    #         # 保留原始的 LLM 完整输出供调试
-    #         "raw_llm_output": llm_decision_result
-    #     }
 
 class CompletenessController:
     """
@@ -1292,7 +1231,7 @@ class AgentE:
             reasoning_history = self.reasoning_history
         
         # 构建prompt
-        prompt = Prompt_E_Test_YesNo.replace("{{QUESTION}}", question)
+        prompt = Prompt_E_Test_MCQ.replace("{{QUESTION}}", question)
         prompt = prompt.replace("{{FINAL_DECISION}}", json.dumps(final_decision, indent=2))
         prompt = prompt.replace("{{FUSION_RESULT}}", json.dumps(fusion_result, indent=2))
         # prompt = prompt.replace("{{BELIEF_ANALYSIS}}", json.dumps(belief_analysis, indent=2))
@@ -1308,7 +1247,7 @@ class AgentE:
         
         prompt = prompt.replace("{{EVIDENCE_LIST}}", json.dumps(simplified_evidence, indent=2, ensure_ascii=False))
         prompt = prompt.replace("{{REASONING_HISTORY}}", json.dumps(reasoning_history, indent=2, ensure_ascii=False))
-        print(f"输入给生成模型的完整内容是：\n{prompt}\n")
+        # print(f"输入给生成模型的完整内容是：\n{prompt}\n")
         # 调用LLM生成报告
         response = self._call_llm_api(prompt)
         # print(f"生成模型的原始响应内容是：\n{response}\n")

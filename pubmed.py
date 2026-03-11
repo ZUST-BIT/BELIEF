@@ -26,7 +26,7 @@ class bio_pubmed_data:
         # 记得重新运行 build 来生效新的索引结构
         self.builder.build_index()
 
-    def search_bio_faiss(self, vector_query, original_query, top_k=5):
+    def search_bio_faiss(self, vector_query, original_query, top_k=3):
         """
         vector_query: 用于召回 (Query + MeSH)
         original_query: 用于重排 (Query)

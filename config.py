@@ -1,6 +1,15 @@
 # 系统配置参数
 import argparse
 
+# ==================== Think 模式控制 ====================
+# 针对 Qwen3、QwQ 等带推理思考模式的模型：
+#   True  - 通过 extra_body 关闭 think 模式，节省 token，适合结构化 JSON 输出任务
+#   False - 保持模型默认行为（不发送 enable_thinking 参数）
+# 注意：仅对支持 enable_thinking 参数的 API 端点生效（如 vLLM + Qwen3）
+#       如果 API 端点不支持该参数，设置 True 可能导致请求报错，建议先测试
+DISABLE_THINKING = False
+# ========================================================
+
 def set_argument():
     parser = argparse.ArgumentParser(prog='MEDAR-QA', description='Medical Question Answering System')
     parser.add_argument('--project',type=str,default='MEDAR-QA')

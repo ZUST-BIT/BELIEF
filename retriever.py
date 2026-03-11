@@ -29,9 +29,6 @@ def retrieve_process(
     final_evidence_list = []
     entities_to_align = []
     
-    # 2. 从智能体A的结果中提取实体
-    # print("📌 使用智能体A的分析结果进行检索")
-    
     # 智能体A可能返回的实体字段名称
     entity_keys = ['biomedical_entities', 'entities', 'key_entities', 'extracted_entities']
     
@@ -57,8 +54,6 @@ def retrieve_process(
                     entities_to_align.append(value)
                 elif isinstance(value, list):
                     entities_to_align.extend(value)
-    
-    # print(f"   从智能体A提取到 {len(entities_to_align)} 个实体/概念")
     
     # 去重和清洗
     entities_to_align = list(set([
