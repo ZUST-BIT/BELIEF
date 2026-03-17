@@ -1,7 +1,6 @@
 """
-MedQA RAG 基线测试脚本
-测试模型使用检索增强（RAG），但不使用完整 MEDAR-QA 流程
-简化版：检索 + 直接生成
+MedQA 基线测试脚本
+测试模型不使用 MEDAR-QA 流程，仅基于自身知识回答选择题
 """
 
 import json
@@ -12,28 +11,19 @@ from typing import Dict, List, Optional
 from tqdm import tqdm
 
 from llm_client import get_llm_client
-from agents import AgentA
-from retriever import retrieve_process
 
 
 # ==================== 配置参数 ====================
 DATA_PATH = "data/medqa_sample.jsonl"          # MedQA 数据集路径
 OUTPUT_DIR = "TEST_RESULTS/medqa"              # 结果输出目录
-TEST_LIMIT = 500                              # 测试数量，None 表示全部测试
+TEST_LIMIT = 500                                 # 测试数量，None 表示全部测试
 SAVE_INTERVAL = 50                             # 保存间隔
-
-TEMPERATURE = 0.0                              # 选择题尽量低温
-MAX_TOKENS = 50                                # 只需要返回 A/B/C/D
-TOP_K_EVIDENCE = 5                             # 最多使用多少条证据
-MAX_CHARS_PER_EVIDENCE = 1000                  # 每条证据最多保留多少字符
-MAX_CONTEXT_CHARS = 4000                       # 最终上下文最大字符数
+TEMPERATURE = 0.0                              # 选择题建议尽量低温
+MAX_TOKENS = 50                                # 这里只需要输出 A/B/C/D
 # ================================================
 
 
 PROMPT_TEMPLATE = """You are a medical expert answering a multiple-choice medical exam question.
-
-Retrieved Evidence:
-{context}
 
 Question:
 {question}
@@ -45,8 +35,6 @@ C. {option_c}
 D. {option_d}
 
 Instructions:
-- Use the retrieved evidence as the primary reference.
-- If the retrieved evidence is incomplete, you may use your medical knowledge cautiously.
 - Choose the single best answer.
 - Respond with ONLY one capital letter: A, B, C, or D.
 - Do not provide any explanation.
@@ -55,8 +43,8 @@ Instructions:
 Your response:"""
 
 
-class MedQARAGEvaluator:
-    """MedQA RAG 评估器（检索增强生成）"""
+class MedQABaselineEvaluator:
+    """MedQA 基线评估器"""
 
     def __init__(self):
         self.results = []
@@ -64,10 +52,7 @@ class MedQARAGEvaluator:
         self.total_count = 0
         self.parse_fail_count = 0
         self.error_count = 0
-        self.no_retrieval_count = 0
-
         self.llm = get_llm_client()
-        self.agent_a = AgentA()
 
         os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -83,41 +68,6 @@ class MedQARAGEvaluator:
                     data.append(json.loads(line))
         return data
 
-    def truncate_text(self, text: str, max_chars: int) -> str:
-        """截断文本，避免上下文过长"""
-        if not text:
-            return ""
-        text = str(text).strip()
-        if len(text) <= max_chars:
-            return text
-        return text[:max_chars].rstrip() + " ...[TRUNCATED]"
-
-    def format_context(self, evidence_list: List[Dict]) -> str:
-        """将检索到的证据格式化为上下文字符串，并控制长度"""
-        if not evidence_list:
-            return "No relevant evidence found."
-
-        context_parts = []
-        total_chars = 0
-
-        for i, evidence in enumerate(evidence_list[:TOP_K_EVIDENCE], 1):
-            content = self.truncate_text(evidence.get("content", ""), MAX_CHARS_PER_EVIDENCE)
-            source = evidence.get("source", "unknown")
-
-            if not content:
-                continue
-
-            part = f"[{i}] Source: {source}\n{content}"
-            projected_len = total_chars + len(part)
-
-            if projected_len > MAX_CONTEXT_CHARS:
-                break
-
-            context_parts.append(part)
-            total_chars += len(part)
-
-        return "\n\n".join(context_parts) if context_parts else "No relevant evidence found."
-
     def extract_answer(self, response: Optional[str]) -> str:
         """
         从模型响应中稳健提取答案选项
@@ -132,9 +82,11 @@ class MedQARAGEvaluator:
 
         text = response.strip().upper()
 
+        # 1) 最严格：整个响应就是单个字母
         if re.fullmatch(r"[ABCD]", text):
             return text
 
+        # 2) 常见模式优先匹配
         patterns = [
             r"^\s*ANSWER\s*[:：]?\s*([ABCD])\b",
             r"^\s*THE\s+ANSWER\s+IS\s*[:：]?\s*([ABCD])\b",
@@ -150,28 +102,18 @@ class MedQARAGEvaluator:
 
         return ""
 
-    def build_prompt(self, item: Dict, context: str) -> str:
-        """构建 Prompt"""
+    def build_prompt(self, item: Dict) -> str:
+        """构建 prompt"""
         question = item.get("question", "")
         options = item.get("options", {})
 
         return PROMPT_TEMPLATE.format(
-            context=context,
             question=question,
             option_a=options.get("A", ""),
             option_b=options.get("B", ""),
             option_c=options.get("C", ""),
             option_d=options.get("D", ""),
         )
-
-    def summarize_sources(self, evidence_list: List[Dict]) -> List[str]:
-        """提取检索来源，便于后续分析"""
-        sources = []
-        for e in evidence_list[:TOP_K_EVIDENCE]:
-            src = e.get("source", "unknown")
-            if src not in sources:
-                sources.append(src)
-        return sources
 
     def run_single_test(self, item: Dict) -> Dict:
         """运行单个测试样本"""
@@ -180,27 +122,9 @@ class MedQARAGEvaluator:
         options = item.get("options", {})
         ground_truth = str(item.get("answer_idx", "")).strip().upper()
 
+        prompt = self.build_prompt(item)
+
         try:
-            # Step 1: Agent A 进行实体提取
-            agent_a_result = self.agent_a.run(question)
-
-            # Step 2: 执行检索
-            retrieval_result = retrieve_process(question, agent_a_result)
-            if retrieval_result is None:
-                retrieval_result = []
-            if not isinstance(retrieval_result, list):
-                retrieval_result = []
-
-            # Step 3: 格式化检索上下文
-            context = self.format_context(retrieval_result)
-            retrieved_count = len(retrieval_result)
-            has_retrieval = retrieved_count > 0
-
-            if not has_retrieval:
-                self.no_retrieval_count += 1
-
-            # Step 4: 构建 Prompt 并调用 LLM
-            prompt = self.build_prompt(item, context)
             response = self.llm.chat(
                 prompt,
                 temperature=TEMPERATURE,
@@ -210,13 +134,11 @@ class MedQARAGEvaluator:
             predicted = self.extract_answer(response)
             is_correct = (predicted == ground_truth)
 
-            parse_failed = (predicted == "")
-            if parse_failed:
-                self.parse_fail_count += 1
-
-            print(f"\n[IDX: {idx}] 检索条数: {retrieved_count}")
-            print(f"[IDX: {idx}] 模型原始响应: {repr(response)}")
+            print(f"\n[IDX: {idx}] 模型原始响应: {repr(response)}")
             print(f"[IDX: {idx}] 提取答案: {predicted}")
+
+            if predicted == "":
+                self.parse_fail_count += 1
 
             return {
                 "idx": idx,
@@ -225,13 +147,6 @@ class MedQARAGEvaluator:
                 "ground_truth": ground_truth,
                 "predicted": predicted,
                 "raw_response": response,
-                "retrieved_count": retrieved_count,
-                "retrieved_sources": self.summarize_sources(retrieval_result),
-                "has_retrieval": has_retrieval,
-                "used_context_length": len(context),
-                "context": context,
-                "agent_a_result": agent_a_result,
-                "parse_failed": parse_failed,
                 "is_correct": is_correct,
                 "error": None,
             }
@@ -245,13 +160,6 @@ class MedQARAGEvaluator:
                 "ground_truth": ground_truth,
                 "predicted": "",
                 "raw_response": None,
-                "retrieved_count": 0,
-                "retrieved_sources": [],
-                "has_retrieval": False,
-                "used_context_length": 0,
-                "context": None,
-                "agent_a_result": None,
-                "parse_failed": False,
                 "is_correct": False,
                 "error": str(e),
             }
@@ -259,7 +167,7 @@ class MedQARAGEvaluator:
     def run_evaluation(self):
         """运行完整评估"""
         print("=" * 80)
-        print("MedQA RAG 测试（检索增强生成）")
+        print("MedQA 基线测试（纯模型知识）")
         print("=" * 80)
 
         data = self.load_data()
@@ -273,10 +181,9 @@ class MedQARAGEvaluator:
             if result["is_correct"]:
                 self.correct_count += 1
 
-            accuracy = self.correct_count / self.total_count * 100 if self.total_count > 0 else 0.0
+            accuracy = (self.correct_count / self.total_count * 100) if self.total_count > 0 else 0.0
 
             print(f"\n[{i}/{len(data)}] IDX: {result['idx']}")
-            print(f"  检索到: {result['retrieved_count']} 条证据")
             print(f"  标准答案: {result['ground_truth']}, 预测: {result['predicted']}, 正确: {result['is_correct']}")
             print(f"  当前准确率: {accuracy:.2f}%")
 
@@ -290,49 +197,36 @@ class MedQARAGEvaluator:
         """保存结果"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         prefix = "interim_" if interim else "final_"
-        filename = os.path.join(OUTPUT_DIR, f"medqa_rag_{prefix}{timestamp}.json")
+        filename = os.path.join(OUTPUT_DIR, f"baseline_{prefix}{timestamp}.json")
         latest_filename = os.path.join(
             OUTPUT_DIR,
-            "medqa_rag_latest.json" if not interim else "medqa_rag_interim_latest.json"
+            "baseline_latest.json" if not interim else "baseline_interim_latest.json"
         )
 
-        accuracy = self.correct_count / self.total_count * 100 if self.total_count > 0 else 0.0
-        avg_retrieved = (
-            sum(r["retrieved_count"] for r in self.results) / len(self.results)
-            if self.results else 0.0
-        )
+        accuracy = (self.correct_count / self.total_count * 100) if self.total_count > 0 else 0.0
 
         save_data = {
             "meta": {
                 "timestamp": timestamp,
-                "test_type": "medqa_rag",
+                "test_type": "medqa_baseline",
                 "total_count": self.total_count,
                 "correct_count": self.correct_count,
                 "accuracy": accuracy,
                 "test_limit": TEST_LIMIT,
                 "temperature": TEMPERATURE,
                 "max_tokens": MAX_TOKENS,
-                "top_k_evidence": TOP_K_EVIDENCE,
-                "max_chars_per_evidence": MAX_CHARS_PER_EVIDENCE,
-                "max_context_chars": MAX_CONTEXT_CHARS,
-                "avg_retrieved_count": avg_retrieved,
                 "parse_fail_count": self.parse_fail_count,
                 "error_count": self.error_count,
-                "no_retrieval_count": self.no_retrieval_count,
                 "data_path": DATA_PATH,
             },
             "results": [
                 {
                     "idx": r["idx"],
                     "question": r["question"],
+                    "options": r["options"],
                     "ground_truth": r["ground_truth"],
                     "predicted": r["predicted"],
                     "raw_response": r["raw_response"],
-                    "retrieved_count": r["retrieved_count"],
-                    "retrieved_sources": r["retrieved_sources"],
-                    "has_retrieval": r["has_retrieval"],
-                    "used_context_length": r["used_context_length"],
-                    "parse_failed": r["parse_failed"],
                     "is_correct": r["is_correct"],
                     "error": r["error"],
                 }
@@ -351,24 +245,18 @@ class MedQARAGEvaluator:
 
     def print_summary(self):
         """打印评估摘要"""
-        accuracy = self.correct_count / self.total_count * 100 if self.total_count > 0 else 0.0
-        avg_retrieved = (
-            sum(r["retrieved_count"] for r in self.results) / len(self.results)
-            if self.results else 0.0
-        )
+        accuracy = (self.correct_count / self.total_count * 100) if self.total_count > 0 else 0.0
 
         print("\n" + "=" * 80)
-        print("评估摘要 - MedQA RAG 测试")
+        print("评估摘要 - MedQA 基线测试")
         print("=" * 80)
         print(f"总测试数量: {self.total_count}")
         print(f"正确数量: {self.correct_count}")
         print(f"准确率: {accuracy:.2f}%")
-        print(f"平均检索证据数: {avg_retrieved:.2f}")
-        print(f"无检索结果数量: {self.no_retrieval_count}")
         print(f"解析失败数量: {self.parse_fail_count}")
         print(f"接口错误数量: {self.error_count}")
 
-        print("\n按选项统计:")
+        # 按标准答案选项统计
         for opt in ["A", "B", "C", "D"]:
             opt_total = sum(1 for r in self.results if str(r["ground_truth"]).upper() == opt)
             opt_correct = sum(
@@ -382,7 +270,7 @@ class MedQARAGEvaluator:
 
 
 def main():
-    evaluator = MedQARAGEvaluator()
+    evaluator = MedQABaselineEvaluator()
     evaluator.run_evaluation()
 
 

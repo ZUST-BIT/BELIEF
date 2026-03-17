@@ -7,7 +7,7 @@ import argparse
 #   False - 保持模型默认行为（不发送 enable_thinking 参数）
 # 注意：仅对支持 enable_thinking 参数的 API 端点生效（如 vLLM + Qwen3）
 #       如果 API 端点不支持该参数，设置 True 可能导致请求报错，建议先测试
-DISABLE_THINKING = False
+DISABLE_THINKING = True
 # ========================================================
 
 def set_argument():

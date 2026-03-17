@@ -18,7 +18,7 @@ from retriever import retrieve_process
 # ==================== 配置参数 ====================
 DATA_PATH = "data/pubmedqa_sample.json"  # PubMedQA数据集路径
 OUTPUT_DIR = "TEST_RESULTS"               # 结果输出目录
-TEST_LIMIT = None                           # 测试数量，None表示全部测试
+TEST_LIMIT = 100                           # 测试数量，None表示全部测试
 SAVE_INTERVAL = 1000                         # 保存间隔
 # ================================================
 
