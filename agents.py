@@ -7,12 +7,11 @@ import json
 import re
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime
-from prompt import (Prompt_A, Prompt_B, Prompt_E, Prompt_E_Test_MCQ, Prompt_E_Test_YesNo,
+from prompt import (Prompt_A, Prompt_B, Prompt_E_Test_MCQ, Prompt_E_Test_YesNo,
                     Prompt_C_Optimized, Prompt_DirectLLM, Prompt_DirectLLM_YesNo,
                     Prompt_FinalAggregator, Prompt_FinalAggregator_YesNo)
 from config import set_argument
 from llm_client import call_llm
-
 
 def extract_json_from_response(response: str) -> dict:
     """
@@ -40,7 +39,7 @@ def extract_json_from_response(response: str) -> dict:
             fb, lb = inner.find('{'), inner.rfind('}')
             if fb != -1 and lb > fb:
                 try:
-                    return json.loads(inner[fb:lb + 1])
+                    return json.loads(inner[fb:lb + 1], strict=False)
                 except json.JSONDecodeError:
                     pass
 
@@ -87,7 +86,7 @@ def extract_json_from_response(response: str) -> dict:
         for chunk in reversed(parts[1:]):
             json_str = chunk.split("```")[0].strip()
             try:
-                return json.loads(json_str)
+                return json.loads(json_str, strict=False)
             except json.JSONDecodeError:
                 continue
 
@@ -98,7 +97,7 @@ def extract_json_from_response(response: str) -> dict:
         code_blocks = [parts[k].strip() for k in range(1, len(parts), 2)]
         for block in reversed(code_blocks):
             try:
-                return json.loads(block)
+                return json.loads(block, strict=False)
             except json.JSONDecodeError:
                 continue
 
@@ -108,13 +107,13 @@ def extract_json_from_response(response: str) -> dict:
         spans_sorted = sorted(spans, key=lambda x: x[1] - x[0], reverse=True)
         for start, end in spans_sorted:
             try:
-                return json.loads(response[start:end])
+                return json.loads(response[start:end], strict=False)
             except json.JSONDecodeError:
                 continue
 
     # 方法4: 直接尝试解析整个响应（响应本身就是纯 JSON）
     try:
-        return json.loads(response.strip())
+        return json.loads(response.strip(), strict=False)
     except json.JSONDecodeError:
         pass
 
@@ -548,20 +547,8 @@ class AgentC:
         frame_of_discernment: List[str]
     ) -> Tuple[Dict[str, float], float, float]:
         """
-        [核心规则引擎] 根据LLM分类标签，通过确定性规则计算BPA值。
-
-        新版标签格式：
-        - source_privilege
-        - relevance
-        - source_quality
-        - quality_trap
-        - direction_polarity   : SUPPORTS / REFUTES / NEUTRAL
-        - direction_strength   : STRONGLY / WEAKLY / NONE
-        - mapped_fod_option    : FoD中的具体选项 or NONE
-
-        设计原则：
-        - LLM负责理解、分类、映射到FoD
-        - Python只负责量化与BPA计算
+        [核心规则引擎 - 已修复 REFUTES 逻辑] 
+        根据 LLM 分类标签，通过确定性规则计算 BPA 值。
         """
         bpa: Dict[str, float] = {opt: 0.0 for opt in frame_of_discernment}
         bpa['uncertainty_theta'] = 0.0
@@ -607,33 +594,20 @@ class AgentC:
         if mapped_option_raw and str(mapped_option_raw).upper().strip() != 'NONE':
             matched_opt = self._fuzzy_match_option(str(mapped_option_raw), frame_of_discernment)
 
-        # ── Step 4: mass分配 ───────────────────────────────────
-        if polarity == 'SUPPORTS':
-            # 支持某个具体FoD选项
-            if matched_opt is not None:
-                bpa[matched_opt] = mass
-            else:
-                # LLM未能可靠映射到FoD，保守归入不确定性
-                bpa['uncertainty_theta'] = mass
-
-        elif polarity == 'REFUTES':
-            # 多分类下，反对某个选项 != 自动支持其余所有选项
-            # 因此：
-            # - 二分类：可以转给对立项
-            # - 多分类：保守归入不确定性
-            if matched_opt is not None:
-                opposite_opts = [opt for opt in frame_of_discernment if opt != matched_opt]
-                if len(frame_of_discernment) == 2 and len(opposite_opts) == 1:
-                    bpa[opposite_opts[0]] = mass
-                else:
-                    bpa['uncertainty_theta'] = mass
-            else:
-                bpa['uncertainty_theta'] = mass
-
+        # ── Step 4: mass 分配 (核心修复点) ───────────────────────
+        # 逻辑修正：只要 LLM 成功映射到了具体的 FoD 选项，就直接赋值。
+        # 不再依赖 FoD 的长度来判断是否转移质量。
+        # LLM 的 mapped_fod_option 已经代表了 "证据支持的结论" (无论是 Confirm 还是 Contradict)
+        
+        if matched_opt is not None:
+            # 无论 polarity 是 SUPPORTS 还是 REFUTES，matched_opt 都是证据指向的那个具体结论
+            # 例如：如果证据说 "无差异"，LLM 会映射到 "FACT_CONTRADICTED"
+            # 此时我们直接把 mass 给 "FACT_CONTRADICTED" 即可
+            bpa[matched_opt] = mass
         else:
-            # 异常标签，保守处理
-            bpa['uncertainty_theta'] = 1.0
-            return bpa, adjusted_reliability, 0.0
+            # 如果 LLM 没能映射到任何具体选项 (mapped_fod_option = NONE)
+            # 则保守地将质量归入不确定性
+            bpa['uncertainty_theta'] = mass
 
         # ── Step 5: 计算剩余不确定性 ───────────────────────────
         assigned = sum(v for k, v in bpa.items() if k != 'uncertainty_theta')
@@ -907,7 +881,6 @@ class AgentC:
             "bpa_list": valid_bpas
         }
 
-
 class AgentD:
     """
     智能体D - 纯数学多证据融合引擎
@@ -1013,7 +986,7 @@ class AgentD:
             }
         return result
 
-    def make_decision(self, fused_bpa: Dict[str, float], threshold: float = 0.4) -> Dict[str, Any]:
+    def make_decision(self, fused_bpa: Dict[str, float], threshold: float = 0.8) -> Dict[str, Any]:
         """
         基于融合 BPA 做出决策：选出质量最高的 FoD 选项。
 
@@ -1268,7 +1241,6 @@ class CompletenessController:
             "confidence": "moderate"
         }
 
-
 class AgentE:
     """
     智能体E - 报告生成与上下文维护
@@ -1280,7 +1252,7 @@ class AgentE:
         self.args = set_argument()
         self.reasoning_history = []  # 维护推理历史
         
-    def _call_llm_api(self, prompt: str, temperature: float = 0) -> str:
+    def _call_llm_api(self, prompt: str, temperature: float = 0.2) -> str:
         """
         调用LLM（统一接口）
         """
@@ -1338,7 +1310,7 @@ class AgentE:
             reasoning_history = self.reasoning_history
         
         # 构建prompt
-        prompt = Prompt_E_Test_YesNo.replace("{{QUESTION}}", question)
+        prompt = Prompt_E_Test_MCQ.replace("{{QUESTION}}", question)
         prompt = prompt.replace("{{FINAL_DECISION}}", json.dumps(final_decision, indent=2))
         prompt = prompt.replace("{{FUSION_RESULT}}", json.dumps(fusion_result, indent=2))
         # prompt = prompt.replace("{{BELIEF_ANALYSIS}}", json.dumps(belief_analysis, indent=2))
@@ -1425,7 +1397,6 @@ class AgentE:
         
         return report
 
-
 class AgentDirectLLM:
     """
     直接LLM推理智能体
@@ -1436,8 +1407,86 @@ class AgentDirectLLM:
     def __init__(self):
         self.args = set_argument()
 
-    def _call_llm_api(self, prompt: str, temperature: float = 0) -> str:
-        return call_llm(prompt, temperature=temperature, max_tokens=2000)
+    def _call_llm_api(self, prompt: str, temperature: float = 0.4) -> str:
+        return call_llm(prompt, temperature=temperature, max_tokens=4096)
+
+    def _repair_common_json_issues(self, response: str) -> Optional[Dict[str, Any]]:
+        """
+        轻量修复常见的LLM JSON格式问题后再尝试解析。
+        仅做保守修复，避免误改语义。
+        """
+        if not response:
+            return None
+
+        repaired = response.strip()
+
+        # 去掉 markdown 代码围栏
+        repaired = re.sub(r'^```json\s*', '', repaired, flags=re.IGNORECASE)
+        repaired = re.sub(r'^```\s*', '', repaired)
+        repaired = re.sub(r'\s*```\s*$', '', repaired)
+
+        # 修复 key_evidence_used 常见错误：
+        # "key_evidence_used": [ "evidence_id": 1 ]
+        # -> "key_evidence_used": [ {"evidence_id": 1} ]
+        repaired = re.sub(
+            r'("key_evidence_used"\s*:\s*\[\s*)"([A-Za-z0-9_\-]+)"\s*:\s*([^\]\n\r]+?)(\s*\])',
+            r'\1{"\2": \3}\4',
+            repaired,
+            flags=re.DOTALL
+        )
+
+        # 只截取首尾大括号范围，剔除前后噪音文本
+        first_brace = repaired.find('{')
+        last_brace = repaired.rfind('}')
+        if first_brace != -1 and last_brace > first_brace:
+            repaired = repaired[first_brace:last_brace + 1]
+
+        try:
+            return json.loads(repaired, strict=False)
+        except Exception:
+            return None
+
+    def _normalize_direct_llm_result(self, result: Dict[str, Any], is_mcq: bool) -> Dict[str, Any]:
+        """
+        统一直接LLM分支输出，确保下游字段稳定。
+        """
+        if not isinstance(result, dict):
+            result = {}
+
+        # 置信度兜底与范围裁剪
+        conf = result.get('confidence_score', 0.0)
+        try:
+            conf = float(conf)
+        except Exception:
+            conf = 0.0
+        result['confidence_score'] = max(0.0, min(1.0, conf))
+
+        if is_mcq:
+            sel = str(result.get('selected_option', 'UNKNOWN')).strip().upper()
+            result['selected_option'] = sel if sel in {'A', 'B', 'C', 'D'} else 'UNKNOWN'
+            result.setdefault('key_evidence_used', [])
+            return result
+
+        # Yes/No 题型标准化
+        ans = str(result.get('answer', 'UNKNOWN')).strip().lower()
+        tendency = str(result.get('directional_tendency', '')).strip().lower()
+
+        if ans in {'yes', 'no', 'maybe'}:
+            normalized_answer = ans
+        elif ans in {'true', 'y', '1'}:
+            normalized_answer = 'yes'
+        elif ans in {'false', 'n', '0'}:
+            normalized_answer = 'no'
+        elif ans in {'uncertain', 'unknown', 'inconclusive'}:
+            normalized_answer = 'maybe'
+        else:
+            normalized_answer = 'maybe' if tendency in {'lean_yes', 'lean_no', 'balanced'} else 'UNKNOWN'
+
+        result['answer'] = normalized_answer
+        result['directional_tendency'] = tendency if tendency in {'lean_yes', 'lean_no', 'balanced'} else 'balanced'
+        result.setdefault('uncertainty_note', '')
+        result.setdefault('key_evidence_used', [])
+        return result
 
     def run(
         self,
@@ -1491,7 +1540,8 @@ class AgentDirectLLM:
             evidence_summaries.append(summary)
 
         # 根据题型选择对应 Prompt
-        prompt_template = Prompt_DirectLLM if is_mcq else Prompt_DirectLLM_YesNo
+        prompt_template = Prompt_DirectLLM
+        # if is_mcq else Prompt_DirectLLM_YesNo
         prompt = prompt_template.replace("{{QUESTION}}", question)
         prompt = prompt.replace(
             "{{ANALYZED_EVIDENCE}}",
@@ -1499,7 +1549,12 @@ class AgentDirectLLM:
         )
 
         response = self._call_llm_api(prompt)
+        # print(f"[直接LLM分支] 原始响应内容是：\n{response}\n")
         result = extract_json_from_response(response)
+
+        # 二次容错：针对常见半合法JSON进行修复后重试
+        if result is None:
+            result = self._repair_common_json_issues(response)
 
         if result is None:
             print(f"[直接LLM分支] JSON解析失败，原始响应: {response[:300]}...")
@@ -1511,6 +1566,9 @@ class AgentDirectLLM:
                 "error": "JSON解析失败"
             }
 
+        # 输出规范化，保证下游兼容
+        result = self._normalize_direct_llm_result(result, is_mcq=is_mcq)
+
         if verbose:
             ans_key = "selected_option" if is_mcq else "answer"
             print(f"[直接LLM分支] 答案: {result.get(ans_key)}")
@@ -1518,19 +1576,359 @@ class AgentDirectLLM:
 
         return result
 
-
 class AgentFinalAggregator:
     """
-    最终聚合智能体
-    功能：综合D-S推理分支（智能体E输出）与直接LLM分支的结果，生成最终答案。
-    只在 ENABLE_DIRECT_LLM_BRANCH=True 时由主流程调用。
+    最终聚合智能体（融合仲裁版）
+
+    设计目标：
+    1. 不再简单硬投票，而是让 LLM 结合 DS 与 Direct LLM 两路结果做仲裁
+    2. 外部 Python 先计算权重、阈值、风险提示，作为“仲裁上下文”
+    3. 最终答案允许：
+       - 采用 DS
+       - 采用 Direct LLM
+       - 两者一致时直接确认
+       - 在极少数情况下给出“第三种答案”（仅限 MCQ 合法选项内）
+    4. 但最终仍由 Python 做后处理校验，保证字段一致性
     """
 
     def __init__(self):
         self.args = set_argument()
 
-    def _call_llm_api(self, prompt: str, temperature: float = 0) -> str:
-        return call_llm(prompt, temperature=temperature, max_tokens=2000)
+        # ========== 可调参数 ==========
+        self.weight_exponent = 1.5        # 置信度放大指数
+        self.override_margin = 0.12       # 一方明显高于另一方时的优势边界
+        self.high_confidence = 0.75       # 高置信度阈值
+        self.low_conflict_threshold = 0.15
+        self.high_conflict_threshold = 0.40
+
+    def _call_llm_api(self, prompt: str, temperature: float = 0.2) -> str:
+        return call_llm(prompt, temperature=temperature, max_tokens=2500)
+
+    def _safe_float(self, x, default=0.0) -> float:
+        try:
+            return float(x)
+        except Exception:
+            return default
+
+    def _normalize_mcq_option(self, x: str) -> str:
+        if not x:
+            return "UNKNOWN"
+        x = str(x).strip().upper()
+        return x if x in {"A", "B", "C", "D", "E", "F"} else "UNKNOWN"
+
+    def _normalize_yesno_answer(self, x: str) -> str:
+        if not x:
+            return "maybe"
+        x = str(x).strip().lower()
+        if x in {"yes", "true", "support", "supported"}:
+            return "yes"
+        if x in {"no", "false", "refute", "refuted"}:
+            return "no"
+        return "maybe"
+
+    def _map_answer_to_score(self, answer: str, tendency: str = None) -> float:
+        """
+        Yes/No 用的数值映射
+        """
+        if not answer:
+            return 0.0
+        ans = str(answer).lower().strip()
+
+        if ans == "yes":
+            return 1.0
+        if ans == "no":
+            return -1.0
+        if ans == "maybe":
+            if tendency:
+                tend = str(tendency).lower()
+                if "lean_yes" in tend:
+                    return 0.3
+                if "lean_no" in tend:
+                    return -0.3
+            return 0.0
+        return 0.0
+
+    def _extract_ds_info(self, ds_result: Dict[str, Any], is_mcq: bool) -> Dict[str, Any]:
+        if is_mcq:
+            option = self._normalize_mcq_option(
+                ds_result.get("selected_option", ds_result.get("answer", "UNKNOWN"))
+            )
+            conf = self._safe_float(
+                ds_result.get("confidence_score", ds_result.get("decision_confidence", 0.0)),
+                0.0
+            )
+            conflict = self._safe_float(
+                ds_result.get("fusion_result", {}).get("conflict_coefficient", 0.0),
+                0.0
+            )
+            return {
+                "answer": option,
+                "confidence": conf,
+                "reason": ds_result.get("reason", ds_result.get("decision_reason", "")),
+                "conflict": conflict,
+                "raw": ds_result
+            }
+
+        answer = self._normalize_yesno_answer(ds_result.get("answer", "maybe"))
+        conf = self._safe_float(ds_result.get("confidence_score", 0.0), 0.0)
+        return {
+            "answer": answer,
+            "confidence": conf,
+            "reason": ds_result.get("reasoning", ""),
+            "conflict": self._safe_float(ds_result.get("fusion_result", {}).get("conflict_coefficient", 0.0), 0.0),
+            "raw": ds_result
+        }
+
+    def _extract_llm_info(self, llm_result: Dict[str, Any], is_mcq: bool) -> Dict[str, Any]:
+        if is_mcq:
+            option = self._normalize_mcq_option(llm_result.get("selected_option", "UNKNOWN"))
+            conf = self._safe_float(llm_result.get("confidence_score", 0.0), 0.0)
+            return {
+                "answer": option,
+                "confidence": conf,
+                "reason": llm_result.get("reasoning", ""),
+                "tendency": llm_result.get("directional_tendency", ""),
+                "raw": llm_result
+            }
+
+        answer = self._normalize_yesno_answer(llm_result.get("answer", "maybe"))
+        conf = self._safe_float(llm_result.get("confidence_score", 0.0), 0.0)
+        return {
+            "answer": answer,
+            "confidence": conf,
+            "reason": llm_result.get("reasoning", ""),
+            "tendency": llm_result.get("directional_tendency", ""),
+            "raw": llm_result
+        }
+
+    def _build_arbitration_context_mcq(self, ds_info: Dict[str, Any], llm_info: Dict[str, Any]) -> Dict[str, Any]:
+        ds_ans = ds_info["answer"]
+        llm_ans = llm_info["answer"]
+        ds_conf = ds_info["confidence"]
+        llm_conf = llm_info["confidence"]
+        conflict = ds_info.get("conflict", 0.0)
+
+        agreement = (ds_ans != "UNKNOWN" and ds_ans == llm_ans)
+
+        # 动态权重
+        w_ds = ds_conf ** self.weight_exponent
+        w_llm = llm_conf ** self.weight_exponent
+        total_w = w_ds + w_llm
+        ds_weight_norm = (w_ds / total_w) if total_w > 0 else 0.5
+        llm_weight_norm = (w_llm / total_w) if total_w > 0 else 0.5
+
+        # 默认推荐来源
+        if agreement:
+            recommended_source = "BOTH"
+            recommended_answer = ds_ans
+            rationale = "Both branches agree on the same option."
+        else:
+            # DS 强优势：高置信度且高于 LLM 一定幅度
+            if ds_conf >= self.high_confidence and (ds_conf - llm_conf) >= self.override_margin:
+                recommended_source = "DS"
+                recommended_answer = ds_ans
+                rationale = "DS branch has a clearly stronger confidence advantage."
+            # LLM 强优势：高置信度且高于 DS 一定幅度
+            elif llm_conf >= self.high_confidence and (llm_conf - ds_conf) >= self.override_margin:
+                recommended_source = "LLM"
+                recommended_answer = llm_ans
+                rationale = "Direct LLM branch has a clearly stronger confidence advantage."
+            else:
+                # 冲突低时，更信 DS；冲突高且 LLM 更强时，更信 LLM
+                if conflict <= self.low_conflict_threshold and ds_ans != "UNKNOWN":
+                    recommended_source = "DS"
+                    recommended_answer = ds_ans
+                    rationale = "DS conflict is low, so fused evidence is relatively stable."
+                elif conflict >= self.high_conflict_threshold and llm_conf >= ds_conf and llm_ans != "UNKNOWN":
+                    recommended_source = "LLM"
+                    recommended_answer = llm_ans
+                    rationale = "DS conflict is high and LLM confidence is not lower."
+                else:
+                    # 平衡场景：按权重归一值推荐
+                    if ds_weight_norm >= llm_weight_norm and ds_ans != "UNKNOWN":
+                        recommended_source = "DS"
+                        recommended_answer = ds_ans
+                        rationale = "Weighted arbitration slightly favors DS."
+                    else:
+                        recommended_source = "LLM"
+                        recommended_answer = llm_ans
+                        rationale = "Weighted arbitration slightly favors Direct LLM."
+
+        # 给仲裁模型的建议
+        advice = []
+        if agreement:
+            advice.append("The two branches agree; strong prior preference should be given to that answer unless there is an obvious logical flaw.")
+        else:
+            advice.append("The two branches disagree; examine whether DS retrieved evidence is actually mechanism-relevant or merely topic-relevant.")
+            advice.append("If the DS evidence is only indirectly related but the LLM uses strong domain mechanism knowledge, the LLM answer may override DS.")
+            advice.append("If the LLM reasoning is vague but DS provides directly aligned evidence with low conflict, prefer DS.")
+
+        if conflict >= self.high_conflict_threshold:
+            advice.append("DS conflict is high; be cautious about blindly trusting DS fusion.")
+        elif conflict <= self.low_conflict_threshold:
+            advice.append("DS conflict is low; DS fused conclusion is relatively internally stable.")
+
+        if abs(ds_conf - llm_conf) <= 0.08:
+            advice.append("Confidence gap is small; the final answer may come from either branch or a carefully justified third option within the legal answer set.")
+        else:
+            advice.append("Confidence gap is meaningful; use that as a strong prior but not as an absolute rule.")
+
+        return {
+            "mode": "MCQ",
+            "ds_answer": ds_ans,
+            "llm_answer": llm_ans,
+            "ds_confidence": round(ds_conf, 4),
+            "llm_confidence": round(llm_conf, 4),
+            "ds_weight_norm": round(ds_weight_norm, 4),
+            "llm_weight_norm": round(llm_weight_norm, 4),
+            "agreement": agreement,
+            "conflict_coefficient": round(conflict, 4),
+            "recommended_source": recommended_source,
+            "recommended_answer": recommended_answer,
+            "recommendation_rationale": rationale,
+            "advice": advice
+        }
+
+    def _build_arbitration_context_yesno(self, ds_info: Dict[str, Any], llm_info: Dict[str, Any]) -> Dict[str, Any]:
+        ds_ans = ds_info["answer"]
+        llm_ans = llm_info["answer"]
+        ds_conf = ds_info["confidence"]
+        llm_conf = llm_info["confidence"]
+
+        ds_score = self._map_answer_to_score(ds_ans)
+        llm_score = self._map_answer_to_score(llm_ans, llm_info.get("tendency"))
+
+        w_ds = ds_conf ** self.weight_exponent
+        w_llm = llm_conf ** self.weight_exponent
+        total_w = w_ds + w_llm
+        final_score = 0.0 if total_w == 0 else (ds_score * w_ds + llm_score * w_llm) / total_w
+
+        if final_score > 0.35:
+            recommended_answer = "yes"
+        elif final_score < -0.35:
+            recommended_answer = "no"
+        else:
+            recommended_answer = "maybe"
+
+        agreement = (ds_ans == llm_ans)
+
+        advice = [
+            "Use weighted score as a prior, not as an absolute rule.",
+            "If one branch clearly misunderstands the question type or uses irrelevant evidence, override it.",
+            "Keep the final reasoning aligned with the final answer."
+        ]
+
+        return {
+            "mode": "YESNO",
+            "ds_answer": ds_ans,
+            "llm_answer": llm_ans,
+            "ds_confidence": round(ds_conf, 4),
+            "llm_confidence": round(llm_conf, 4),
+            "agreement": agreement,
+            "weighted_score": round(final_score, 4),
+            "recommended_answer": recommended_answer,
+            "advice": advice
+        }
+
+    def _build_prompt(
+        self,
+        question: str,
+        ds_result: Dict[str, Any],
+        direct_llm_result: Dict[str, Any],
+        arbitration_context: Dict[str, Any],
+        is_mcq: bool
+    ) -> str:
+        """
+        使用 prompt.py 中的模板构造最终聚合提示词
+        """
+        prompt_template = Prompt_FinalAggregator
+        # if is_mcq else Prompt_FinalAggregator_YesNo
+        prompt = prompt_template.replace("{{QUESTION}}", question)
+        prompt = prompt.replace("{{DS_RESULT}}", json.dumps(ds_result, ensure_ascii=False, indent=2))
+        prompt = prompt.replace("{{DIRECT_LLM_RESULT}}", json.dumps(direct_llm_result, ensure_ascii=False, indent=2))
+        prompt = prompt.replace("{{ARBITRATION_CONTEXT}}", json.dumps(arbitration_context, ensure_ascii=False, indent=2))
+
+        return prompt
+
+    def _validate_and_repair_result(
+        self,
+        result: Dict[str, Any],
+        arbitration_context: Dict[str, Any],
+        is_mcq: bool
+    ) -> Dict[str, Any]:
+        """
+        后处理，保证结果合法且自洽
+        """
+        if not isinstance(result, dict):
+            result = {}
+
+        legal_mcq = {"A", "B", "C", "D", "E", "F"}
+        legal_yesno = {"yes", "no", "maybe"}
+
+        recommended_answer = arbitration_context.get("recommended_answer", "UNKNOWN")
+        ds_answer = arbitration_context.get("ds_answer", "UNKNOWN")
+        llm_answer = arbitration_context.get("llm_answer", "UNKNOWN")
+
+        # 1. final_answer 合法化
+        raw_answer = result.get("final_answer", recommended_answer if recommended_answer else "UNKNOWN")
+        if is_mcq:
+            final_answer = self._normalize_mcq_option(raw_answer)
+            if final_answer not in legal_mcq:
+                # 回退优先级：推荐答案 > DS > LLM
+                if self._normalize_mcq_option(recommended_answer) in legal_mcq:
+                    final_answer = self._normalize_mcq_option(recommended_answer)
+                elif self._normalize_mcq_option(ds_answer) in legal_mcq:
+                    final_answer = self._normalize_mcq_option(ds_answer)
+                elif self._normalize_mcq_option(llm_answer) in legal_mcq:
+                    final_answer = self._normalize_mcq_option(llm_answer)
+                else:
+                    final_answer = "UNKNOWN"
+        else:
+            final_answer = self._normalize_yesno_answer(raw_answer)
+            if final_answer not in legal_yesno:
+                final_answer = recommended_answer if recommended_answer in legal_yesno else "maybe"
+
+        result["final_answer"] = final_answer
+
+        # 2. agreement 不能相信模型，必须程序重算
+        if ds_answer != "UNKNOWN" and llm_answer != "UNKNOWN" and ds_answer == llm_answer:
+            result["agreement"] = "agree"
+        else:
+            result["agreement"] = "disagree"
+
+        # 3. confidence_score 合法化
+        conf = self._safe_float(result.get("confidence_score", 0.0), 0.0)
+        conf = max(0.0, min(1.0, conf))
+
+        # 若最终答案直接等于推荐答案，可适度抬高；否则稍微保守
+        if final_answer == recommended_answer:
+            conf = max(conf, min(0.95, max(
+                self._safe_float(arbitration_context.get("ds_confidence", 0.0), 0.0),
+                self._safe_float(arbitration_context.get("llm_confidence", 0.0), 0.0)
+            )))
+        else:
+            conf = min(conf if conf > 0 else 0.65, 0.85)
+
+        result["confidence_score"] = round(conf, 3)
+
+        # 4. 缺字段兜底
+        if not result.get("reasoning"):
+            result["reasoning"] = "Final answer was selected by integrating DS evidence fusion and direct clinical reasoning under external arbitration guidance."
+
+        if not result.get("integration_note"):
+            result["integration_note"] = f"Recommended source: {arbitration_context.get('recommended_source', 'N/A')}"
+
+        # 5. 注入审计字段
+        result["arbitration_recommendation"] = arbitration_context.get("recommended_answer")
+        result["recommended_source"] = arbitration_context.get("recommended_source")
+        if "weighted_score" in arbitration_context:
+            result["weighted_score"] = arbitration_context.get("weighted_score")
+        result["ds_answer"] = ds_answer
+        result["llm_answer"] = llm_answer
+        result["ds_confidence"] = arbitration_context.get("ds_confidence")
+        result["llm_confidence"] = arbitration_context.get("llm_confidence")
+
+        return result
 
     def run(
         self,
@@ -1540,72 +1938,64 @@ class AgentFinalAggregator:
         task_mode: str = "SELECTION",
         verbose: bool = False
     ) -> Dict[str, Any]:
-        """
-        综合两条分支的结果，输出最终答案。
-
-        Args:
-            question:          原始医学问题
-            ds_result:         智能体E生成的DS推理最终报告
-            direct_llm_result: 直接LLM分支的推理结果
-            task_mode:         来自Agent A的任务模式，"SELECTION"→MCQ，其他→Yes/No
-            verbose:           是否打印调试信息
-
-        Returns:
-            包含 final_answer / agreement / reasoning / confidence_score / integration_note 的字典
-        """
         is_mcq = (task_mode == "SELECTION")
+
+        ds_info = self._extract_ds_info(ds_result, is_mcq=is_mcq)
+        llm_info = self._extract_llm_info(direct_llm_result, is_mcq=is_mcq)
+
+        if is_mcq:
+            arbitration_context = self._build_arbitration_context_mcq(ds_info, llm_info)
+        else:
+            arbitration_context = self._build_arbitration_context_yesno(ds_info, llm_info)
 
         if verbose:
             print(f"\n{'='*60}")
-            mode_label = "MCQ（选择题）" if is_mcq else "Yes/No（是非题）"
-            print(f"[最终聚合] 综合两条分支结果 | 题型: {mode_label}")
+            print(f"[最终聚合] 综合两条分支结果 | 题型: {'MCQ（选择题）' if is_mcq else 'Yes/No（是非题）'}")
+            print(f"[仲裁上下文] DS答案:  {arbitration_context.get('ds_answer')} (conf={arbitration_context.get('ds_confidence')})")
+            print(f"[仲裁上下文] LLM答案: {arbitration_context.get('llm_answer')} (conf={arbitration_context.get('llm_confidence')})")
+            print(f"[仲裁上下文] 推荐来源: {arbitration_context.get('recommended_source')}")
+            print(f"[仲裁上下文] 推荐答案: {arbitration_context.get('recommended_answer')}")
+            if "conflict_coefficient" in arbitration_context:
+                print(f"[仲裁上下文] DS冲突系数: {arbitration_context.get('conflict_coefficient')}")
+            if "weighted_score" in arbitration_context:
+                print(f"[仲裁上下文] 加权分数: {arbitration_context.get('weighted_score')}")
             print(f"{'='*60}")
 
-        # 根据题型选择对应 Prompt
-        prompt_template = Prompt_FinalAggregator if is_mcq else Prompt_FinalAggregator_YesNo
-        prompt = prompt_template.replace("{{QUESTION}}", question)
-        prompt = prompt.replace(
-            "{{DS_RESULT}}",
-            json.dumps(ds_result, ensure_ascii=False, indent=2)
-        )
-        prompt = prompt.replace(
-            "{{DIRECT_LLM_RESULT}}",
-            json.dumps(direct_llm_result, ensure_ascii=False, indent=2)
+        prompt = self._build_prompt(
+            question=question,
+            ds_result=ds_result,
+            direct_llm_result=direct_llm_result,
+            arbitration_context=arbitration_context,
+            is_mcq=is_mcq
         )
 
         response = self._call_llm_api(prompt)
         result = extract_json_from_response(response)
 
         if result is None:
-            print(f"[最终聚合] JSON解析失败，原始响应: {response[:300]}...")
-            # 兜底：选择置信度更高的一方
-            ds_conf = ds_result.get('confidence_score', 0.0)
-            llm_conf = direct_llm_result.get('confidence_score', 0.0)
-            if ds_conf >= llm_conf:
-                # DS分支答案字段：MCQ用answer(AgentE输出)，YesNo同
-                chosen = ds_result.get('answer',
-                            ds_result.get('selected_option',
-                            ds_result.get('decision', 'UNKNOWN')))
-                note = f"JSON解析失败，兜底选择DS分支（置信度 {ds_conf:.2f} >= LLM分支 {llm_conf:.2f}）"
-            else:
-                # 直接LLM分支：MCQ用selected_option，YesNo用answer
-                chosen = direct_llm_result.get(
-                    'selected_option' if is_mcq else 'answer', 'UNKNOWN'
-                )
-                note = f"JSON解析失败，兜底选择LLM分支（置信度 {llm_conf:.2f} > DS分支 {ds_conf:.2f}）"
+            # 兜底：直接采用推荐答案
             result = {
-                "final_answer": chosen,
-                "agreement": "unknown",
-                "reasoning": response[:500],
-                "confidence_score": max(ds_conf, llm_conf),
-                "integration_note": note,
-                "error": "JSON解析失败"
+                "final_answer": arbitration_context.get("recommended_answer", "UNKNOWN" if is_mcq else "maybe"),
+                "agreement": "agree" if arbitration_context.get("agreement") else "disagree",
+                "reasoning": "LLM aggregation parsing failed, so the system fell back to the externally recommended arbitration result.",
+                "confidence_score": max(
+                    self._safe_float(arbitration_context.get("ds_confidence", 0.0), 0.0),
+                    self._safe_float(arbitration_context.get("llm_confidence", 0.0), 0.0)
+                ),
+                "integration_note": "Fallback to externally computed arbitration recommendation."
             }
 
+        result = self._validate_and_repair_result(
+            result=result,
+            arbitration_context=arbitration_context,
+            is_mcq=is_mcq
+        )
+
         if verbose:
-            print(f"[最终聚合] 最终答案:     {result.get('final_answer')}")
-            print(f"[最终聚合] 两分支一致性: {result.get('agreement')}")
-            print(f"[最终聚合] 置信度:       {result.get('confidence_score')}")
+            print(f"[最终聚合] ✅ 最终答案:     {result.get('final_answer')}")
+            print(f"[最终聚合] 🤝 两分支一致性: {result.get('agreement')}")
+            print(f"[最终聚合] 📊 置信度:       {result.get('confidence_score')}")
+            print(f"[最终聚合] 📝 说明:         {result.get('integration_note')}")
 
         return result
 

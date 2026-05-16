@@ -10,6 +10,31 @@ import argparse
 DISABLE_THINKING = True
 # ========================================================
 
+# ==================== 按模型单独配置（可选） ====================
+# key 使用实际模型名（如 "gpt-oss:20b"、"qwen3:32b"）
+# 1) MODEL_REASONING_LEVELS：通过 system prompt 注入 "Reasoning: <level>"
+# 2) MODEL_SYSTEM_PROMPTS：附加该模型专用系统提示词
+# 3) MODEL_DISABLE_THINKING_OVERRIDES：覆盖全局 DISABLE_THINKING
+#    - True/False：强制覆盖
+#    - 不配置该模型：沿用全局 DISABLE_THINKING
+
+MODEL_REASONING_LEVELS = {
+    "gpt-oss:20b": "high",
+}
+
+MODEL_SYSTEM_PROMPTS = {
+    "gpt-oss:20b": (
+        "You are a biomedical QA assistant. "
+        "Prefer concise answers and put final answer first."
+    ),
+}
+
+MODEL_DISABLE_THINKING_OVERRIDES = {
+    # gpt-oss:20b 某些部署不支持显式 think 开关，默认不强行发送 think=false
+    "gpt-oss:20b": False,
+}
+# ========================================================
+
 def set_argument():
     parser = argparse.ArgumentParser(prog='MEDAR-QA', description='Medical Question Answering System')
     parser.add_argument('--project',type=str,default='MEDAR-QA')

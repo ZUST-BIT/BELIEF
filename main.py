@@ -40,40 +40,18 @@ def _dedup_against_user_context(papers: list, user_context_text: str, fingerprin
 
 def main():
     """主测试函数 - 带多轮检索闭环"""
-    
-    # question = """
-    #     "question":"A 3-week-old male newborn is brought to the physician because of an inward turning of his left forefoot. He was born at 38 weeks' gestation by cesarean section because of breech presentation. The pregnancy was complicated by oligohydramnios. Examination shows concavity of the medial border of the left foot with a skin crease just below the ball of the great toe. The lateral border of the left foot is convex. The heel is in neutral position. Tickling the lateral border of the foot leads to correction of the deformity. The remainder of the examination shows no abnormalities. X-ray of the left foot shows an increased angle between the 1st and 2nd metatarsal bones. Which of the following is the most appropriate next step in the management of this patient?"
-    #     "options":{
-    #     "A":"Foot abduction brace",
-    #     "B":"Arthrodesis of the forefoot",
-    #     "C":"Reassurance",
-    #     "D":"Tarsometatarsal capsulotomy"
-    # }
-    # """
-    # question = """
-    #         "question": "A 67-year-old man with transitional cell carcinoma of the bladder comes to the physician because of a 2-day history of ringing sensation in his ear. He received this first course of neoadjuvant chemotherapy 1 week ago. Pure tone audiometry shows a sensorineural hearing loss of 45 dB. The expected beneficial effect of the drug that caused this patient's symptoms is most likely due to which of the following actions?",
-    #         "options": {
-    #         "A": "Inhibition of proteasome",
-    #         "B": "Hyperstabilization of microtubules",
-    #         "C": "Generation of free radicals",
-    #         "D": "Cross-linking of DNA"
-    #         },
-    # """
-    context = ""
-    question = "Continuation of pregnancy after antenatal corticosteroid administration: opportunity for rescue?"
-    context = """
-            "To determine the duration of continuing pregnancy after antenatal corticosteroid (AC) administration and to evaluate the potential opportunity for rescue AC.",
-            "Retrospective analysis of women at 24-32 weeks' gestation who received AC at one institution.",
-            "Six hundred ninety-two women received AC. Two hundred forty-seven (35.7%) delivered at>or = 34 weeks' gestation. Three hundred twenty-one (46.4%) delivered within 1 week of AC; 92 of those women (13.3%) delivered within 24 hours. Only 124 (17.9%) remained pregnant 1 week after AC and delivered at<34 weeks. The latter were compared to women delivering>2 week after AC but>or = 34 weeks. More likely to deliver at<34 weeks were those women who received AC for premature preterm rupture of membranes (OR 3.83, 95% CI 2.06-7.17), twins (OR 2.90, 95% CI 1.42-5.95) or before 28 weeks (OR 2.21, 95% CI 1.38-3.52)."
+
+    question = """A 20-year-old man comes to the physician because of worsening gait unsteadiness and bilateral hearing loss for 1 month. He has had intermittent tingling sensations on both cheeks over this time period. He has no history of serious medical illness and takes no medications. Audiometry shows bilateral sensorineural hearing loss. Genetic evaluation shows a mutation of a tumor suppressor gene on chromosome 22 that encodes merlin. This patient is at increased risk for which of the following conditions?
+                "A": "Renal cell carcinoma",
+                "B": "Meningioma",
+                "C": "Astrocytoma",
+                "D": "Vascular malformations"
     """
-    # ======================================================
-    # 直接LLM分支开关
-    # 设置为 True  → 在D-S流程之外并行运行直接LLM推理分支，
-    #                     并在最后由聚合智能体合并两条分支的结果。
-    # 设置为 False → 仅运行现有D-S流程，跳过聚合步骤。
+    context = ""
     ENABLE_DIRECT_LLM_BRANCH: bool = True
     # ======================================================
-
+    TASK_MODE = "SELECTION"
+    # TASK_MODE = "YES_NO"
     print("\n" + "="*80)
     print("MEDAR-QA 医学证据推理系统")
     print("="*80)
@@ -160,7 +138,7 @@ def main():
             direct_llm_result = agent_direct_llm.run(
                 question=question,
                 agent_b_result=agent_b_result,
-                task_mode=agent_a_result.get('task_mode', 'SELECTION'),
+                task_mode=TASK_MODE,
                 verbose=True
             )
             print("\n直接LLM分支结果:")
@@ -170,9 +148,7 @@ def main():
         print(f"\n[轮次 {current_round} - 步骤 4/6] 智能体C：证据可靠性评估与BPA计算")
         print("-" * 80)
         contextual_question = f"原问题{question}\n当前识别框架为{fod}。"
-        # 新版 Prompt_A 将 PICO 嵌套在 extraction.elements 中
         question_pico_data = agent_a_result.get('extraction', {}).get('elements', {})
-        # agent_c_result = agent_c.run(contextual_question, agent_b_result)
         agent_c_result = agent_c.run(
             hypothesis=contextual_question, 
             agent_b_result=agent_b_result,
@@ -189,7 +165,6 @@ def main():
         print("-" * 80)
         
         # 提取FoD和BPA列表
-        # fod = agent_a_result.get('frame_of_discernment', ['H', '¬H'])
         bpa_list = agent_c_result.get('bpa_list', [])
         # 修改后：传入包含内容信息的 evaluations
         evaluations_for_d = agent_c_result.get('evaluations', [])
@@ -353,11 +328,25 @@ def main():
         print(f"\n{'='*80}")
         print("[最终聚合] 综合DS分支与直接LLM分支结果")
         print("="*80)
+        
+        # 【核心修改】直接从智能体 E 的结果中提取标准化数据
+        # Agent E 的输出已经包含了标准化的 'answer' (yes/no/maybe) 和 'confidence_score'
+        ds_for_agg = {
+            "answer": agent_e_result.get("answer", "maybe"),             # 直接获取最终答案
+            "confidence_score": agent_e_result.get("confidence_score", 0.0), # 直接获取最终置信度
+            "reasoning": agent_e_result.get("reasoning", ""),            # 获取推理过程
+            # 保留一些底层数据供调试或高级分析（可选）
+            "source": "AgentE_FinalReport",
+            "raw_d_decision": agent_d_result.get("final_decision", {}).get("decision"),
+            "fusion_result": agent_d_result.get("fusion_result", {})
+        }
+        print(f"[调试] 传入聚合器的 DS 数据: Ans={ds_for_agg['answer']}, Conf={ds_for_agg['confidence_score']}")
+
         final_aggregated_result = agent_final_agg.run(
             question=question,
-            ds_result=agent_e_result,
+            ds_result=ds_for_agg,       # 传入清洗后的 E 的结果
             direct_llm_result=direct_llm_result,
-            task_mode=agent_a_result.get('task_mode', 'SELECTION'),
+            task_mode=TASK_MODE,        # 保持模式设置
             verbose=True
         )
         print("\n最终聚合结果:")

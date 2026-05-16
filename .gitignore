@@ -12,6 +12,13 @@ workflow_logs/**
 kg_index_output/**
 TEST_RESULTS/**
 data/**
+bootstrap_results/**
+conflict_label_output/**
+grouped_samples_medmcqa/**
+grouped_samples_medqa/**
+grouped_samples_pubmedqa/**
+other_script/**
+test_script/**
 
 *.bin
 *.index
