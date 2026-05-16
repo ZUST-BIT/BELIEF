@@ -2,15 +2,13 @@
 
 Biomedical Evidence Modeling with Uncertainty-Aware Evidence Fusion
 
-## 项目概览
+## Project Overview
+BELIEF is a high-performance multi-agent biomedical question-answering framework designed specifically for retrieving heterogeneous evidence in biomedical scenarios. It employs a dual-path reasoning architecture, combining neurosemantic reasoning with structured evidence fusion. The multi-agent process is: Question Analysis → Evidence Gathering → Evidence Evaluation → Fusion Decision → Answer Generation. Supported task types include multiple-choice questions (MedQA/MedMCQA) and true/false questions (PubMedQA).
 
-- 多智能体流水线：问题分析、证据整理、证据评估、融合决策、答案生成
-- 支持选择题（MedQA/MedMCQA）与是非题（PubMedQA）等任务
-
-## 目录结构
+## Directory Structure
 
 ```
-MEDAR-QA/
+BELIEF /
 ├── main.py                  # 主流程示例（多轮检索与推理）
 ├── agents.py                # 核心智能体实现（A-E + 聚合器）
 ├── prompt.py                # 主流程提示词模板
@@ -25,100 +23,94 @@ MEDAR-QA/
 └── requirements.txt
 ```
 
-## 快速开始
+## Quick Start
 
-### 1) 安装依赖
+### 1) Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2) 配置关键参数
+### 2) Configure Parameters
 
 配置文件在 [config.py](config.py) 和 [llm_client.py](llm_client.py)
 
-### 3) 运行主流程
+### 3) Run the Main Pipeline
 
 ```bash
 python main.py
 ```
+Note: You can customize the question and context targets directly within main.py for ad-hoc testing.
 
-在 [main.py](main.py) 中可以直接替换 `question` 与 `context`。
+##  Retrieval Modes
+Online Retrieval: Queries the live PubMed database via the official API by default (see retriever.py and pubmed_online.py).
 
-## 检索方式说明
-
-- 在线检索：默认走 PubMed Online（见 [retriever.py](retriever.py) + [pubmed_online.py](pubmed_online.py)）
-- 本地检索：FAISS + 本地索引（见 [pubmed.py](pubmed.py) 与 [faiss_util/](faiss_util/)）
+Local Retrieval: Performs dense semantic search over a local medical literature pool using FAISS vector indices (see pubmed.py and faiss_util/).
 
 ## 许可证
 
 见 [LICENSE](LICENSE)。
 
-**原因：** 索引文件不存在或路径配置错误
+## Troubleshooting
 
-**解决方案：**
+### Q1: Index File Not Found or Path Configuration Error
+Solution: Rebuild the local database index by running:
 ```bash
-# 重新构建索引
 python faiss_util/bio_faiss.py --build
-
-# 检查索引文件是否存在
-ls output/faiss_index_bio.bin
 ```
+### Q2: LLM API Call Failure
+Common Causes: Invalid API keys, network connectivity/proxy issues, or exhausted API quotas.
+Solution:
 
-### Q3: LLM API 调用失败
+  Double-check your endpoints and credentials in config.py.
 
-**常见原因：**
-- API 密钥错误
-- 网络连接问题
-- API 调用额度不足
+  Configure an HTTP proxy or swap out the base URL if navigating network restrictions.
 
-**解决方案：**
-- 检查 `config.py` 中的 API 配置
-- 使用代理或更换 API 地址
-- 切换到本地模型（如 Ollama）
+  Switch the backend engine to a local model instance (e.g., via Ollama or vLLM).
+### Q3: Out of Memory (OOM) Error
+Solution:
 
-### Q4: 内存不足错误
+  Decrease the batch size during FAISS index lookups or model inferences.
 
-**解决方案：**
-- 减小 FAISS 索引的批处理大小
-- 使用量化模型（如 int8）
-- 增加系统虚拟内存
+  Load models using weight quantization (e.g., int8 or int4).
 
-## 🤝 贡献指南
+  Expand your system's virtual swap memory.
 
-欢迎贡献代码、提出问题或建议！
+## 🤝 Contributing
 
-### 贡献流程
+Contributions, bug reports, and feature requests are highly welcome!
 
-1. **Fork** 本项目到你的 GitHub 账号
-2. **创建特性分支**：`git checkout -b feature/awesome-feature`
-3. **提交更改**：`git commit -m "Add awesome feature"`
-4. **推送到分支**：`git push origin feature/awesome-feature`
-5. **提交 Pull Request**
+### Contribution Process
 
-### 代码规范
+1. **Fork** this repository to your own GitHub account.
+2. **Create a feature branch**：`git checkout -b feature/awesome-feature`
+3. **Commit your changes**：`git commit -m "Add awesome feature"`
+4. **Push to the branch**：`git push origin feature/awesome-feature`
+5. **Open a Pull Request against our main branch.**
 
-- 遵循 PEP 8 编码规范
-- 添加必要的注释和文档字符串
-- 提交前运行测试：`pytest tests/`
+### Code Style
+
+- Adhere strictly to PEP 8 coding standards.
+- Document all modules, classes, and methods with descriptive docstrings.
+- Run existing test suites before submitting your PR: `pytest tests/`
 
 ---
 
-## 🛠️ 技术栈
+## 🛠️ Tech Stack
 
-| 组件 | 技术 |
+| Component | Technology |
 |------|------|
 | **LLM** | GPT-4o-mini / GPT-4o / DeepSeek / Qwen |
-| **文献数据** | PubMed |
-| **框架** | LangChain + PyTorch |
-| **NLP 工具** | spaCy + SciSpaCy |
-|**LLM 推理框架** | vLLM |
+| **Literature Database** | PubMed |
+| **Core Frameworks** | LangChain + PyTorch |
+| **NLP Utilities** | spaCy + SciSpaCy |
+|**Inference Engine** | vLLM |
 
 ---
 
-## 📄 许可证
+## 📄 License
 
-本项目基于 [MIT License](LICENSE) 开源。
+This project is licensed under the terms of the MIT License.
 
 ```
 MIT License
@@ -131,13 +123,13 @@ of this software and associated documentation files...
 
 ---
 
-## 📧 联系方式
+## 📧 Contact
 
-如有问题、建议或合作意向，欢迎联系：
+For questions, suggestions, or potential collaborations, please reach out via:
 
-- **GitHub Issues**: [提交问题](https://github.com/your-repo/MEDAR-QA/issues)
+- **GitHub Issues**: Submit an issue directly to our repository tracker.
 - **Email**: ninghao@zust.edu.cn
-- **项目主页**: ...
+- **Project Homepage**: ...
 
 ---
 
