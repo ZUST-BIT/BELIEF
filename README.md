@@ -6,7 +6,6 @@ Biomedical Evidence Modeling with Uncertainty-Aware Evidence Fusion
 
 - 多智能体流水线：问题分析、证据整理、证据评估、融合决策、答案生成
 - 支持选择题（MedQA/MedMCQA）与是非题（PubMedQA）等任务
-- 提供多种基线方法与消融实验脚本
 
 ## 目录结构
 
@@ -46,23 +45,10 @@ python main.py
 
 在 [main.py](main.py) 中可以直接替换 `question` 与 `context`。
 
-## 任务与评估脚本
-
-- PubMedQA 相关：test_pubmedqa_*.py
-- MedQA/MedMCQA 相关：test_medqa_*.py / test_medmcqa_*.py
-- 消融实验：ablation*_agents.py + test_*_ablation*.py
-- 基线方法：self_rag_baseline.py, crag_baseline.py, rat_baseline.py
-- 结果统计：count_* / calc_* / analyze_ablation_results.py
-
 ## 检索方式说明
 
 - 在线检索：默认走 PubMed Online（见 [retriever.py](retriever.py) + [pubmed_online.py](pubmed_online.py)）
 - 本地检索：FAISS + 本地索引（见 [pubmed.py](pubmed.py) 与 [faiss_util/](faiss_util/)）
-
-## 仓库上传建议
-
-- 不建议提交：data/、TEST_RESULTS/、results/、output/、bootstrap_results/、grouped_samples_*/、kg_index_output/ 等数据与产出目录
-- 建议先处理敏感信息（API Key / 本地路径）
 
 ## 许可证
 
@@ -126,6 +112,7 @@ ls output/faiss_index_bio.bin
 | **文献数据** | PubMed |
 | **框架** | LangChain + PyTorch |
 | **NLP 工具** | spaCy + SciSpaCy |
+|**LLM 推理框架** | vLLM |
 
 ---
 
@@ -149,8 +136,8 @@ of this software and associated documentation files...
 如有问题、建议或合作意向，欢迎联系：
 
 - **GitHub Issues**: [提交问题](https://github.com/your-repo/MEDAR-QA/issues)
-- **Email**: your-email@example.com
-- **项目主页**: [MEDAR-QA Documentation](https://your-docs-site.com)
+- **Email**: ninghao@zust.edu.cn
+- **项目主页**: ...
 
 ---
 
