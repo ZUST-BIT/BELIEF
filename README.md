@@ -1,8 +1,6 @@
-# MEDAR-QA
+# BELIEF：Structured Evidence Modeling and Uncertainty-Aware Fusion for Biomedical Question Answering
 
-**M**ultimodal **E**vidence **D**iscovery **a**nd **R**easoning for Biomedical **Q**uestion **A**nswering
-
-面向生物医学问答的多智能体推理系统，结合 PubMed 检索与证据融合，支持多轮推理与消融/基线实验。
+Biomedical Evidence Modeling with Uncertainty-Aware Evidence Fusion
 
 ## 项目概览
 
