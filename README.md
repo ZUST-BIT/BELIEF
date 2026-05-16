@@ -9,18 +9,18 @@ BELIEF is a high-performance multi-agent biomedical question-answering framework
 
 ```
 BELIEF /
-├── main.py                  # 主流程示例（多轮检索与推理）
-├── agents.py                # 核心智能体实现（A-E + 聚合器）
-├── prompt.py                # 主流程提示词模板
-├── retriever.py             # PubMed 在线检索逻辑
-├── pubmed_online.py         # PubMed API 封装
-├── pubmed.py                # 本地 FAISS 检索封装
-├── llm_client.py            # LLM 调用封装（API/Ollama/vLLM/Transformers）
-├── config.py                # 全局配置（模型、路径、数据库连接）
-├── utils/                   # 数据清洗/实体链接等工具
-├── faiss_util/              # FAISS 索引构建与检索
-├── *_baseline.py            # 基线方法（self_rag/crag/rat 等）
-└── requirements.txt
+├── main.py                  # Main pipeline execution (multi-turn retrieval & inference)
+├── agents.py                # Core agent implementations (Agents A-E + Aggregator)
+├── prompt.py                # Prompt templates for the main workflow
+├── retriever.py             # PubMed online retrieval orchestration logic
+├── pubmed_online.py         # PubMed API wrapper
+├── pubmed.py                # Local FAISS retrieval wrapper
+├── llm_client.py            # LLM invocation wrapper (API / Ollama / vLLM / Transformers)
+├── config.py                # Global configurations (models, paths, DB connections)
+├── utils/                   # Utilities for data cleaning, entity linking, etc.
+├── faiss_util/              # FAISS index construction and querying tools
+├── *_baseline.py            # Baseline implementations (Self-RAG, CRAG, RAT, etc.)
+└── requirements.txt         # Project dependencies
 ```
 
 ## Quick Start
