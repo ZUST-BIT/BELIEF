@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # BELIEF
 Structured Evidence Modeling and Uncertainty-Aware Fusion for Biomedical Question Answering
 
@@ -60,9 +59,7 @@ User Question
 │ • Conflict resolution & aggregation         │
 └─────────────────────────────────────────────┘
 ```
-
 ---
-
 ## Project Structure
 
 ```
@@ -105,15 +102,9 @@ MEDAR-QA/
 pip install -r requirements.txt
 ```
 
-<<<<<<< HEAD
 ### 2) Configure LLM Backend
-=======
-### 2) Configure Parameters
->>>>>>> 5b0b222fa73ad8788b241f6fab77293f45f7ae8a
-
 Edit [`llm_client.py`](llm_client.py:13), set `LLM_BACKEND` and corresponding backend parameters:
 
-<<<<<<< HEAD
 - **Use Ollama** (recommended for local deployment):
   ```python
   LLM_BACKEND = "ollama"
@@ -145,77 +136,9 @@ A 20-year-old man comes to the physician because of worsening gait unsteadiness.
 "D": "Vascular malformations"
 """
 ```
-<<<<<<< HEAD
----
-
-## 推理流程示例
-
-Run [`main.py`] Typical output process:
-=======
-Note: You can customize the question and context targets directly within main.py for ad-hoc testing.
-
-##  Retrieval Modes
-Online Retrieval: Queries the live PubMed database via the official API by default (see retriever.py and pubmed_online.py).
-
-Local Retrieval: Performs dense semantic search over a local medical literature pool using FAISS vector indices (see pubmed.py and faiss_util/).
-
-
-## Troubleshooting
-
-### Q1: Index File Not Found or Path Configuration Error
-Solution: Rebuild the local database index by running:
-```bash
-python faiss_util/bio_faiss.py --build
-```
-### Q2: LLM API Call Failure
-Common Causes: Invalid API keys, network connectivity/proxy issues, or exhausted API quotas.
-Solution:
-
-  Double-check your endpoints and credentials in config.py.
-
-  Configure an HTTP proxy or swap out the base URL if navigating network restrictions.
-
-  Switch the backend engine to a local model instance (e.g., via Ollama or vLLM).
-### Q3: Out of Memory (OOM) Error
-Solution:
-
-  Decrease the batch size during FAISS index lookups or model inferences.
-
-  Load models using weight quantization (e.g., int8 or int4).
-
-  Expand your system's virtual swap memory.
-
-## 🤝 Contributing
-
-Contributions, bug reports, and feature requests are highly welcome!
-
-### Contribution Process
-
-1. **Fork** this repository to your own GitHub account.
-2. **Create a feature branch**：`git checkout -b feature/awesome-feature`
-3. **Commit your changes**：`git commit -m "Add awesome feature"`
-4. **Push to the branch**：`git push origin feature/awesome-feature`
-5. **Open a Pull Request against our main branch.**
-
-### Code Style
-
-- Adhere strictly to PEP 8 coding standards.
-- Document all modules, classes, and methods with descriptive docstrings.
-- Run existing test suites before submitting your PR: `pytest tests/`
 
 ---
 
-## 🛠️ Tech Stack
-
-| Component | Technology |
-|------|------|
-| **LLM** | GPT-4o-mini / GPT-4o / DeepSeek / Qwen |
-| **Literature Database** | PubMed |
-| **Core Frameworks** | LangChain + PyTorch |
-| **NLP Utilities** | spaCy + SciSpaCy |
-|**Inference Engine** | vLLM |
-
----
 ```
 ================================================================================
 BELIEF Medical Evidence Reasoning System
@@ -246,8 +169,6 @@ Question: A 20-year-old man comes to the physician...
 ```
 
 ---
-
-<<<<<<< HEAD
 ## Retrieval Strategy
 
 | Mode                    | Description                                  |
@@ -262,15 +183,6 @@ The retrieval pipeline follows a hierarchical strategy:
 2. Core concept retrieval
 3. Broad recall
 4. Original-query fallback
-=======
-## 📧 Contact
-
-For questions, suggestions, or potential collaborations, please reach out via:
-
-- **GitHub Issues**: Submit an issue directly to our repository tracker.
-- **Email**: ninghao@zust.edu.cn
-- **Project Homepage**: ...
-
 ---
 
 ## Tech Stack
@@ -284,6 +196,7 @@ For questions, suggestions, or potential collaborations, please reach out via:
 | NLP          | spaCy + SciSpaCy       |
 | DL Framework | PyTorch + Transformers |
 | Database     | Neo4j + MongoDB        |
+| Inference Engine | vLLM |
 ---
 
 ## License
@@ -292,7 +205,16 @@ Released under the MIT License.
 
 ---
 
-📧 Contact us: [<EMAIL>](mailto:<ninghao@zust.edu.cn>)
+## 📧 Contact
+
+For questions, suggestions, or potential collaborations, please reach out via:
+
+- **GitHub Issues**: Submit an issue directly to our repository tracker.
+- **Email**: ninghao@zust.edu.cn
+- **Project Homepage**: ...
+
+---
+
 <div align="center">
 
 **⭐ If you find this project useful, please consider giving it a Star.⭐**
