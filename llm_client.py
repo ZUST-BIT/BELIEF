@@ -5,37 +5,30 @@ LLM统一客户端模块
 2. 本地Transformers加载
 """
 
-import json
 import requests
-from typing import Dict, Any, Optional, List
+from typing import Optional
 from abc import ABC, abstractmethod
-
-
 # ==================== 配置参数 ====================
 # 选择使用的后端: "api" | "ollama" | "vllm" | "transformers"
-LLM_BACKEND = "api"  # 可选: "api", "vllm", "transformers"
+LLM_BACKEND = "ollama"
 
-# API配置（适用于 api 后端，付费API）
+# API配置
 API_URL = "https://api.gptsapi.net/v1"
-API_KEY = "sk_xxx"  # 替换为你的API密钥
+API_KEY = "sk-..."
 MODEL_NAME = "gpt-4o-mini"
 
-# Ollama配置（本地运行，最简单）
-# 安装: https://ollama.ai  然后运行: ollama pull qwen2.5:7b
+# Ollama配置
 OLLAMA_URL = "http://172.18.51.166:11434"
-OLLAMA_MODEL = "qwen3:32b"  # 可选: "qwen2.5:14b", "llama3.1:8b", "deepseek-v2:16b",qwen3:14b
+OLLAMA_MODEL = "qwen2.5:7b"
 
-# vLLM配置（高性能推理服务器）
-# 启动命令: python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-7B-Instruct --port 8000
-# 或直接运行 start_vllm.bat
+# vLLM配置
 VLLM_URL = "http://172.18.51.166:8001/v1"
-VLLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"  # 需要与启动时的模型一致
+VLLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"
 
-# 本地Transformers配置（直接加载，无需服务）
-LOCAL_MODEL_PATH = "Qwen/Qwen2.5-7B-Instruct"  # HuggingFace模型ID或本地路径
+# 本地Transformers配置
+LOCAL_MODEL_PATH = "Qwen/Qwen2.5-7B-Instruct"
 DEVICE = "cuda"  # "cuda" 或 "cpu"
 # ================================================
-
 
 def get_disable_thinking() -> bool:
     """
@@ -113,6 +106,47 @@ def get_disable_thinking_for_model(model_name: str) -> bool:
     return get_disable_thinking()
 
 
+def _remove_think_tags(text: str) -> str:
+    """
+    移除 Qwen3 等模型的思考标签 <think>...</think>
+
+    处理三种情况：
+    1. 正常闭合的 <think>...</think>
+    2. 只有 <think> 没有 </think>（被截断）
+    3. 没有 think 标签
+    """
+    import re
+
+    if not text:
+        return text
+
+    if "</think>" in text:
+        cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        if cleaned:
+            return cleaned
+
+        after_think = text.split("</think>")[-1].strip()
+        if after_think:
+            return after_think
+
+        return ""
+
+    if "<think>" in text:
+        before_think = text.split("<think>")[0].strip()
+        if before_think:
+            return before_think
+
+        think_content = text.split("<think>", 1)[1]
+        first_brace = think_content.find("{")
+        last_brace = think_content.rfind("}")
+        if first_brace != -1 and last_brace > first_brace:
+            return think_content[first_brace:last_brace + 1].strip()
+
+        return ""
+
+    return text.strip()
+
+
 class BaseLLMClient(ABC):
     """LLM客户端基类"""
 
@@ -135,51 +169,6 @@ class OpenAICompatibleClient(BaseLLMClient):
         self.api_url = api_url.rstrip("/")
         self.api_key = api_key
         self.model = model
-
-    def _remove_think_tags(self, text: str) -> str:
-        """
-        移除 Qwen3 等模型的思考标签 <think>...</think>
-
-        处理三种情况：
-        1. 正常闭合的 <think>...</think>
-        2. 只有 <think> 没有 </think>（被截断）
-        3. 没有 think 标签
-        """
-        import re
-
-        if not text:
-            return text
-
-        # 情况1：存在完整 </think> 闭合标签
-        if "</think>" in text:
-            cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-            if cleaned:
-                return cleaned
-
-            # 兜底：取最后一个 </think> 之后的文本
-            after_think = text.split("</think>")[-1].strip()
-            if after_think:
-                return after_think
-
-            return ""
-
-        # 情况2：只有 <think> 没有 </think>
-        if "<think>" in text:
-            before_think = text.split("<think>")[0].strip()
-            if before_think:
-                return before_think
-
-            # 尝试在 think 内容中找 JSON
-            think_content = text.split("<think>", 1)[1]
-            first_brace = think_content.find("{")
-            last_brace = think_content.rfind("}")
-            if first_brace != -1 and last_brace > first_brace:
-                return think_content[first_brace:last_brace + 1].strip()
-
-            return ""
-
-        # 情况3：没有 think 标签
-        return text.strip()
 
     def _build_payload(self, prompt: str, temperature: float, max_tokens: int) -> dict:
         """
@@ -234,7 +223,7 @@ class OpenAICompatibleClient(BaseLLMClient):
             result = response.json()
 
             content = result["choices"][0]["message"]["content"].strip()
-            cleaned_content = self._remove_think_tags(content)
+            cleaned_content = _remove_think_tags(content)
 
             if not cleaned_content:
                 if "<think>" in content:
@@ -270,38 +259,6 @@ class OllamaClient(BaseLLMClient):
         self.base_url = base_url.rstrip("/")
         self.model = model
 
-    def _remove_think_tags(self, text: str) -> str:
-        import re
-
-        if not text:
-            return text
-
-        if "</think>" in text:
-            cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-            if cleaned:
-                return cleaned
-
-            after_think = text.split("</think>")[-1].strip()
-            if after_think:
-                return after_think
-
-            return ""
-
-        if "<think>" in text:
-            before_think = text.split("<think>")[0].strip()
-            if before_think:
-                return before_think
-
-            think_content = text.split("<think>", 1)[1]
-            first_brace = think_content.find("{")
-            last_brace = think_content.rfind("}")
-            if first_brace != -1 and last_brace > first_brace:
-                return think_content[first_brace:last_brace + 1].strip()
-
-            return ""
-
-        return text.strip()
-
     def chat(self, prompt: str, temperature: float = 0.7, max_tokens: int = 2000) -> str:
         disable_thinking = get_disable_thinking_for_model(self.model)
         system_prompt = _get_model_system_prompt(self.model)
@@ -333,7 +290,7 @@ class OllamaClient(BaseLLMClient):
             result = response.json()
 
             content = result.get("response", "").strip()
-            cleaned_content = self._remove_think_tags(content)
+            cleaned_content = _remove_think_tags(content)
 
             if not cleaned_content:
                 if "<think>" in content:
@@ -398,38 +355,6 @@ class TransformersClient(BaseLLMClient):
             print(f"模型加载失败: {e}")
             raise
 
-    def _remove_think_tags(self, text: str) -> str:
-        import re
-
-        if not text:
-            return text
-
-        if "</think>" in text:
-            cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-            if cleaned:
-                return cleaned
-
-            after_think = text.split("</think>")[-1].strip()
-            if after_think:
-                return after_think
-
-            return ""
-
-        if "<think>" in text:
-            before_think = text.split("<think>")[0].strip()
-            if before_think:
-                return before_think
-
-            think_content = text.split("<think>", 1)[1]
-            first_brace = think_content.find("{")
-            last_brace = think_content.rfind("}")
-            if first_brace != -1 and last_brace > first_brace:
-                return think_content[first_brace:last_brace + 1].strip()
-
-            return ""
-
-        return text.strip()
-
     def chat(self, prompt: str, temperature: float = 0.7, max_tokens: int = 2000) -> str:
         try:
             messages = [{"role": "user", "content": prompt}]
@@ -462,7 +387,7 @@ class TransformersClient(BaseLLMClient):
                 skip_special_tokens=True
             ).strip()
 
-            return self._remove_think_tags(response)
+            return _remove_think_tags(response)
 
         except Exception as e:
             print(f"本地模型推理失败: {e}")
@@ -511,15 +436,3 @@ def call_llm(prompt: str, temperature: float = 0.7, max_tokens: int = 2000) -> s
         _global_client = get_llm_client()
 
     return _global_client.chat(prompt, temperature, max_tokens)
-
-
-# ==================== 使用示例 ====================
-if __name__ == "__main__":
-    test_prompt = "请简要介绍一下什么是机器学习？"
-    print(f"测试提示词: {test_prompt}")
-    print(f"使用后端: {LLM_BACKEND}")
-    print(f"DISABLE_THINKING: {get_disable_thinking()}")
-    print("-" * 50)
-
-    response = call_llm(test_prompt)
-    print(f"响应: {response}")

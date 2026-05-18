@@ -9,15 +9,6 @@ import argparse
 #       如果 API 端点不支持该参数，设置 True 可能导致请求报错，建议先测试
 DISABLE_THINKING = True
 # ========================================================
-
-# ==================== 按模型单独配置（可选） ====================
-# key 使用实际模型名（如 "gpt-oss:20b"、"qwen3:32b"）
-# 1) MODEL_REASONING_LEVELS：通过 system prompt 注入 "Reasoning: <level>"
-# 2) MODEL_SYSTEM_PROMPTS：附加该模型专用系统提示词
-# 3) MODEL_DISABLE_THINKING_OVERRIDES：覆盖全局 DISABLE_THINKING
-#    - True/False：强制覆盖
-#    - 不配置该模型：沿用全局 DISABLE_THINKING
-
 MODEL_REASONING_LEVELS = {
     "gpt-oss:20b": "high",
 }
@@ -30,14 +21,13 @@ MODEL_SYSTEM_PROMPTS = {
 }
 
 MODEL_DISABLE_THINKING_OVERRIDES = {
-    # gpt-oss:20b 某些部署不支持显式 think 开关，默认不强行发送 think=false
     "gpt-oss:20b": False,
 }
 # ========================================================
 
 def set_argument():
-    parser = argparse.ArgumentParser(prog='MEDAR-QA', description='Medical Question Answering System')
-    parser.add_argument('--project',type=str,default='MEDAR-QA')
+    parser = argparse.ArgumentParser(prog='BELIEF', description='BELIEF Pipeline Configuration')
+    parser.add_argument('--project',type=str,default='BELIEF')
     parser.add_argument('--neo4j_usr',type=str,default='neo4j')
     # parser.add_argument('--neo4j_pwd',type=str,default='12345678')
     parser.add_argument('--neo4j_pwd',type=str,default='bitlab512')
@@ -50,7 +40,7 @@ def set_argument():
     # parser.add_argument('--api_url',type=str,default='https://api.deepseek.com')
     # parser.add_argument('--api_key',type=str,default='sk-0f17b61caf3f48e99944865634bd3a1c')
     parser.add_argument('--api_url_gpt',type=str,default='https://api.gptsapi.net/v1')
-    parser.add_argument('--api_key_gpt',type=str,default='sk-IGQ8241037bdbeccfb18105d4774dc98ac20067097dQ3dDL')
+    parser.add_argument('--api_key_gpt',type=str,default='sk-IGQ8241037bdbeccfb18105d4774dc')
     parser.add_argument('--fact_jsonl',type=str,default='datafile/fact_corpus_explanatory.jsonl')
     parser.add_argument('--embedding_model_zh',type=str,default='BAAI/bge-large-zh')
     parser.add_argument('--faiss_index_path_omic',type=str,default='output/faiss_index_omic.bin')
