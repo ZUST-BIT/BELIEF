@@ -8,68 +8,41 @@ LLM统一客户端模块
 import requests
 from typing import Optional
 from abc import ABC, abstractmethod
-# ==================== 配置参数 ====================
-# 选择使用的后端: "api" | "ollama" | "vllm" | "transformers"
-LLM_BACKEND = "ollama"
 
-# API配置
-API_URL = "https://api.gptsapi.net/v1"
-API_KEY = "sk-..."
-MODEL_NAME = "gpt-4o-mini"
-
-# Ollama配置
-OLLAMA_URL = "http://172.18.51.166:11434"
-OLLAMA_MODEL = "qwen2.5:7b"
-
-# vLLM配置
-VLLM_URL = "http://172.18.51.166:8001/v1"
-VLLM_MODEL = "Qwen/Qwen2.5-7B-Instruct"
-
-# 本地Transformers配置
-LOCAL_MODEL_PATH = "Qwen/Qwen2.5-7B-Instruct"
-DEVICE = "cuda"  # "cuda" 或 "cpu"
-# ================================================
+from config import (
+    LLM_BACKEND,
+    API_URL,
+    API_KEY,
+    MODEL_NAME,
+    OLLAMA_URL,
+    OLLAMA_MODEL,
+    VLLM_URL,
+    VLLM_MODEL,
+    LOCAL_MODEL_PATH,
+    DEVICE,
+    DISABLE_THINKING,
+    MODEL_REASONING_LEVELS,
+    MODEL_SYSTEM_PROMPTS,
+    MODEL_DISABLE_THINKING_OVERRIDES,
+)
 
 def get_disable_thinking() -> bool:
-    """
-    从 config.py 读取 DISABLE_THINKING，默认 False
-    """
-    try:
-        from config import DISABLE_THINKING
-        return bool(DISABLE_THINKING)
-    except Exception:
-        return False
+    return bool(DISABLE_THINKING)
 
 
 def _get_model_reasoning_level(model_name: str) -> Optional[str]:
-    """
-    从 config.py 读取指定模型的推理级别（如 low/medium/high）
-    """
-    try:
-        from config import MODEL_REASONING_LEVELS
-        if isinstance(MODEL_REASONING_LEVELS, dict):
-            level = MODEL_REASONING_LEVELS.get(model_name)
-            if level is None:
-                return None
+    if isinstance(MODEL_REASONING_LEVELS, dict):
+        level = MODEL_REASONING_LEVELS.get(model_name)
+        if level is not None:
             level = str(level).strip()
             return level or None
-    except Exception:
-        pass
     return None
 
 
 def _get_model_system_prompt(model_name: str) -> Optional[str]:
-    """
-    从 config.py 读取指定模型的 system prompt。
-    若同时配置了推理级别，会自动附加一行 `Reasoning: <level>`。
-    """
     base_prompt = ""
-    try:
-        from config import MODEL_SYSTEM_PROMPTS
-        if isinstance(MODEL_SYSTEM_PROMPTS, dict):
-            base_prompt = str(MODEL_SYSTEM_PROMPTS.get(model_name, "") or "").strip()
-    except Exception:
-        base_prompt = ""
+    if isinstance(MODEL_SYSTEM_PROMPTS, dict):
+        base_prompt = str(MODEL_SYSTEM_PROMPTS.get(model_name, "") or "").strip()
 
     reasoning_level = _get_model_reasoning_level(model_name)
     if reasoning_level:
@@ -82,16 +55,8 @@ def _get_model_system_prompt(model_name: str) -> Optional[str]:
 
 
 def _get_model_disable_thinking_override(model_name: str) -> Optional[bool]:
-    """
-    从 config.py 读取指定模型的 think 开关覆盖。
-    返回：True/False 表示覆盖全局配置；None 表示沿用全局 DISABLE_THINKING。
-    """
-    try:
-        from config import MODEL_DISABLE_THINKING_OVERRIDES
-        if isinstance(MODEL_DISABLE_THINKING_OVERRIDES, dict) and model_name in MODEL_DISABLE_THINKING_OVERRIDES:
-            return bool(MODEL_DISABLE_THINKING_OVERRIDES[model_name])
-    except Exception:
-        pass
+    if isinstance(MODEL_DISABLE_THINKING_OVERRIDES, dict) and model_name in MODEL_DISABLE_THINKING_OVERRIDES:
+        return bool(MODEL_DISABLE_THINKING_OVERRIDES[model_name])
     return None
 
 

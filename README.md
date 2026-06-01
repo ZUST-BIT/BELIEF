@@ -136,7 +136,6 @@ A 20-year-old man comes to the physician because of worsening gait unsteadiness.
 "D": "Vascular malformations"
 """
 ```
-
 ---
 
 ```

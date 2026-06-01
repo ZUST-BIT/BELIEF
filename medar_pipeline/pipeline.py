@@ -22,7 +22,6 @@ from .helpers import (
     dedup_against_user_context,
     build_user_context_evidence,
     build_bpa_summary,
-    build_completeness_inputs,
     build_enhanced_evidence_input,
 )
 
@@ -137,32 +136,6 @@ def run_pipeline(
             note=f"第{current_round}轮推理完成",
         )
         current_round += 1
-        # print_step(f"[轮次 {current_round} - 完备性分析] 评估证据充分性")
-        # completeness_inputs = build_completeness_inputs(agent_d_result)
-        # completeness_result = controller.analyze_completeness(
-        #     completeness_inputs["fused_bpa"],
-        #     completeness_inputs["belief_pl"],
-        #     completeness_inputs["conflict_coef"],
-        # )
-
-        # print(f"当前状态: {completeness_result['state']}")
-        # print(f"Deng熵: {completeness_result.get('entropy', 0):.4f}")
-        # print(f"决策建议: {completeness_result['action']}")
-        # print(f"是否继续检索: {completeness_result['should_continue']}")
-        # print(f"理由: {completeness_result['reason']}")
-        # if "suggestion" in completeness_result:
-        #     print(f"建议: {completeness_result['suggestion']}")
-
-        # if not completeness_result["should_continue"]:
-        #     print("\n✓ 证据充分性满足要求，终止检索")
-        #     break
-
-        # if current_round >= max_rounds:
-        #     print(f"\n✓ 已达到最大轮次限制 ({max_rounds})，终止检索")
-        #     break
-
-        # print("\n→ 证据不充分，需要继续检索...")
-        # current_round += 1
 
     print_title("[步骤 6/6] ReportGenerator：生成最终医学证据报告")
 
