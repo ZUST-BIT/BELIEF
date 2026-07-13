@@ -2,6 +2,12 @@
 *.pyo
 __pycache__/**
 **/__pycache__/**
+.pytest_cache/**
+.coverage
+htmlcov/**
+.venv/**
+venv/**
+.claude/settings.local.json
 
 results/**
 output/**
@@ -11,6 +17,7 @@ exper_script/**
 workflow_logs/**
 kg_index_output/**
 TEST_RESULTS/**
+cache/**
 data/**
 bootstrap_results/**
 conflict_label_output/**
@@ -19,6 +26,19 @@ grouped_samples_medqa/**
 grouped_samples_pubmedqa/**
 other_script/**
 test_script/**
+!test_script/__init__.py
+!test_script/medrag_baseline.py
+!test_script/imedrag_pubmed_baseline.py
+!test_script/tools/
+test_script/tools/**
+!test_script/tools/__init__.py
+!test_script/tools/benchmark_pubmedqa_costs.py
+!test_script/tools/analyze_medrag_costs.py
+
+# Keep generated figures and exploratory plotting code out of the test suite.
+tests/*.png
+tests/*.pdf
+tests/pict1.py
 
 *.bin
 *.index

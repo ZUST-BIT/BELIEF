@@ -1,220 +1,182 @@
-"""MEDAR-QA pipeline orchestration."""
+"""Single-pass MEDAR-QA pipeline orchestration."""
+
+from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Dict, Any, List
+from pathlib import Path
+from typing import List
 
-from agents import (
-    QuestionAnalyzer,
+from medar_agents import (
+    AnswerArbiter,
+    DirectReasoningAgent,
     EvidenceAnalyzer,
     EvidenceEvaluator,
     EvidenceFusionEngine,
+    QuestionAnalyzer,
     ReportGenerator,
-    EvidenceCompletenessController,
-    DirectReasoningAgent,
-    AnswerArbiter,
+    normalize_task_mode,
 )
 from retriever import retrieve_process
+
 from .helpers import (
     JsonDict,
-    print_title,
-    print_step,
-    dedup_against_user_context,
-    build_user_context_evidence,
-    build_bpa_summary,
     build_enhanced_evidence_input,
+    build_user_context_evidence,
+    dedup_against_user_context,
+    print_step,
+    print_title,
 )
 
 
 def run_pipeline(
     question: str,
-    context: str,
+    context: str = "",
     task_mode: str = "SELECTION",
     enable_direct_llm_branch: bool = True,
-    max_rounds: int = 1,
+    *,
+    output_dir: str | Path = "TEST_RESULTS",
 ) -> JsonDict:
+    """Run one evidence-retrieval and reasoning pass for a medical question."""
+    if not isinstance(question, str) or not question.strip():
+        raise ValueError("question must be a non-empty string")
+
+    task_mode = normalize_task_mode(task_mode)
+
     print_title("MEDAR-QA 医学证据推理系统")
     print(f"\n问题: {question}\n")
     if enable_direct_llm_branch:
-        print("✔ 直接LLM分支开关：已开启（将并行D-S分支与直接LLM分支，最后聚合）")
+        print("✓ 双路径推理已开启：依次运行 D-S 证据路径和直接 LLM 路径，最后进行仲裁")
     else:
-        print("✓ 直接LLM分支开关：已关闭（仅运行现有D-S流程）")
+        print("✓ 直接 LLM 路径已关闭：仅运行 D-S 证据路径")
 
-    agent_a = QuestionAnalyzer()
-    agent_b = EvidenceAnalyzer()
-    agent_c = EvidenceEvaluator()
-    agent_d = EvidenceFusionEngine()
-    agent_e = ReportGenerator()
-    controller = EvidenceCompletenessController()
-    agent_direct_llm = DirectReasoningAgent() if enable_direct_llm_branch else None
-    agent_final_agg = AnswerArbiter() if enable_direct_llm_branch else None
-    direct_llm_result = None
+    question_analyzer = QuestionAnalyzer()
+    evidence_analyzer = EvidenceAnalyzer()
+    evidence_evaluator = EvidenceEvaluator()
+    fusion_engine = EvidenceFusionEngine()
+    report_generator = ReportGenerator()
+    direct_reasoner = DirectReasoningAgent() if enable_direct_llm_branch else None
+    answer_arbiter = AnswerArbiter() if enable_direct_llm_branch else None
 
     print_step("[步骤 1/6] QuestionAnalyzer：问题分析与实体提取")
-    agent_a_result = agent_a.run(question)
-    print("\n智能体A分析结果:")
-    print(json.dumps(agent_a_result, ensure_ascii=False, indent=2))
-    fod = agent_a_result.get("frame_of_discernment", ["H", "¬H"])
+    question_analysis = question_analyzer.run(question)
+    print("\n问题分析结果:")
+    print(json.dumps(question_analysis, ensure_ascii=False, indent=2))
+    frame_of_discernment = question_analysis.get("frame_of_discernment", ["H", "¬H"])
 
-    current_round = 1
-    all_evidence: List[JsonDict] = []
-    retrieval_history: List[JsonDict] = []
+    print_step("[步骤 2/6] 知识检索：根据问题分析结果检索证据")
+    retrieved_evidence = retrieve_process(question, question_analysis) or []
+    if not isinstance(retrieved_evidence, list):
+        raise TypeError("retrieve_process must return a list of evidence records")
 
-    all_evidence.extend(build_user_context_evidence(context))
+    user_context = context.strip() if isinstance(context, str) else ""
+    unique_retrieved_evidence = dedup_against_user_context(retrieved_evidence, user_context)
+    skipped_count = len(retrieved_evidence) - len(unique_retrieved_evidence)
+    if skipped_count:
+        print(f"[去重] {skipped_count} 条检索结果与用户上下文重复，已过滤")
 
-    while current_round <= max_rounds:
-        print(f"\n{'='*80}")
-        print(f"第 {current_round} 轮证据推理")
-        print(f"{'='*80}")
+    all_evidence: List[JsonDict] = build_user_context_evidence(user_context)
+    all_evidence.extend(unique_retrieved_evidence)
 
-        print_step(f"[轮次 {current_round} - 步骤 2/6] 知识检索：结合实体进行证据检索")
-        retrieval_result = retrieve_process(question, agent_a_result)
+    print_step("[步骤 3/6] EvidenceAnalyzer：PICO 提取与研究类型分类")
+    evidence_analysis = evidence_analyzer.run(question, all_evidence)
+    print("\n证据分析结果:")
+    print(json.dumps(evidence_analysis, ensure_ascii=False, indent=2))
 
-        user_ctx_text = context if context and context.strip() else ""
-        deduped = dedup_against_user_context(retrieval_result, user_ctx_text)
-        skipped = len(retrieval_result) - len(deduped)
-        if skipped:
-            print(f"[去重] 检测到 {skipped} 条检索结果与用户上下文高度重叠，已过滤")
-        all_evidence.extend(deduped)
-        retrieval_history.append({
-            "round": current_round,
-            "evidence_count": len(retrieval_result),
-            "total_evidence": len(all_evidence),
-        })
-
-        print_step(f"[轮次 {current_round} - 步骤 3/6] EvidenceAnalyzer：PICO提取与研究类型分类")
-        agent_b_result = agent_b.run(question, all_evidence)
-        print("\n智能体B分析结果:")
-        print(json.dumps(agent_b_result, ensure_ascii=False, indent=2))
-
-        if enable_direct_llm_branch and current_round == 1:
-            print_step(f"[轮次 {current_round} - 直接LLM分支] 开始直接LLM推理")
-            direct_llm_result = agent_direct_llm.run(
-                question=question,
-                evidence_result=agent_b_result,
-                task_mode=task_mode,
-                verbose=True,
-            )
-            print("\n直接LLM分支结果:")
-            print(json.dumps(direct_llm_result, ensure_ascii=False, indent=2))
-
-        print_step(f"[轮次 {current_round} - 步骤 4/6] EvidenceEvaluator：证据可靠性评估与BPA计算")
-        contextual_question = f"原问题{question}\n当前识别框架为{fod}。"
-        question_pico_data = agent_a_result.get("extraction", {}).get("elements", {})
-        agent_c_result = agent_c.run(
-            hypothesis=contextual_question,
-            agent_b_result=agent_b_result,
-            question_pico=question_pico_data,
-            frame_of_discernment=fod,
-            verbose=False,
+    direct_llm_result = None
+    if direct_reasoner is not None:
+        print_step("[直接 LLM 路径] 基于结构化证据进行独立推理")
+        direct_llm_result = direct_reasoner.run(
+            question=question,
+            evidence_result=evidence_analysis,
+            task_mode=task_mode,
+            verbose=True,
         )
-        print("\n智能体C评估结果:")
-        print(json.dumps(agent_c_result, ensure_ascii=False, indent=2))
+        print("\n直接 LLM 路径结果:")
+        print(json.dumps(direct_llm_result, ensure_ascii=False, indent=2))
 
-        print_step(f"[轮次 {current_round} - 步骤 5/6] EvidenceFusionEngine：多证据融合与决策")
-        bpa_list = agent_c_result.get("bpa_list", [])
-        if not bpa_list:
-            print("⚠️ 没有有效的BPA，跳过融合步骤")
-            agent_d_result = {
-                "note": "No valid BPA for fusion",
-                "final_decision": {
-                    "decision": "INSUFFICIENT_EVIDENCE",
-                    "confidence": 0.0,
-                    "reason": "没有足够的有效证据进行推理",
-                },
-            }
-        else:
-            agent_d_result = agent_d.run(question, fod, bpa_list)
-            print("\n智能体D融合结果:")
-            print(json.dumps(agent_d_result, ensure_ascii=False, indent=2))
+    print_step("[步骤 4/6] EvidenceEvaluator：证据可靠性评估与 BPA 计算")
+    contextual_question = f"原问题：{question}\n当前识别框架：{frame_of_discernment}。"
+    question_pico = question_analysis.get("extraction", {}).get("elements", {})
+    evidence_evaluation = evidence_evaluator.run(
+        hypothesis=contextual_question,
+        agent_b_result=evidence_analysis,
+        question_pico=question_pico,
+        frame_of_discernment=frame_of_discernment,
+        verbose=False,
+    )
+    print("\n证据评估结果:")
+    print(json.dumps(evidence_evaluation, ensure_ascii=False, indent=2))
 
-        bpa_summary = build_bpa_summary(bpa_list)
-        agent_e.add_reasoning_round(
-            round_num=current_round,
-            evidence_count=len(retrieval_result),
-            bpa_summary=bpa_summary,
-            note=f"第{current_round}轮推理完成",
-        )
-        current_round += 1
+    print_step("[步骤 5/6] EvidenceFusionEngine：多证据融合与决策")
+    bpa_list = evidence_evaluation.get("bpa_list", [])
+    fusion_analysis = fusion_engine.run(question, frame_of_discernment, bpa_list)
+    print("\n证据融合结果:")
+    print(json.dumps(fusion_analysis, ensure_ascii=False, indent=2))
 
     print_title("[步骤 6/6] ReportGenerator：生成最终医学证据报告")
-
-    agent_d_logic_note = f"""
-    [Agent D Logic Trace]:
-    - System Decision: {agent_d_result.get('final_decision', {}).get('decision')}
-    - Evidence Mapping: Agent D identified specific evidence IDs as supporting the decision. 
-      (Agent E MUST verify if this mapping aligns with clinical symptoms).
-    """
-    agent_e.add_reasoning_round(99, 0, {}, note=agent_d_logic_note)
-
-    enhanced_evidence_input = build_enhanced_evidence_input(agent_c_result, all_evidence)
-    final_decision = agent_d_result.get("final_decision", {
-        "decision": "UNCERTAIN",
-        "confidence": 0.0,
-        "reason": "未获得决策结果",
-    })
-
-    fusion_result = agent_d_result.get("fusion_result", {})
-    belief_analysis = agent_d_result.get("belief_plausibility", {})
-
-    agent_e_result = agent_e.run(
+    enhanced_evidence = build_enhanced_evidence_input(evidence_evaluation, all_evidence)
+    final_report = report_generator.run(
         question=question,
-        final_decision=final_decision,
-        fusion_result=fusion_result,
-        evidence_list=enhanced_evidence_input,
+        final_decision=fusion_analysis.get("final_decision", {}),
+        fusion_result=fusion_analysis.get("fusion_result", {}),
+        evidence_list=enhanced_evidence,
+        task_mode=task_mode,
     )
     print("\n最终报告:")
-    print(json.dumps(agent_e_result, ensure_ascii=False, indent=2))
+    print(json.dumps(final_report, ensure_ascii=False, indent=2))
 
     final_aggregated_result = None
-    if enable_direct_llm_branch and direct_llm_result is not None:
-        print_title("[最终聚合] 综合DS分支与直接LLM分支结果")
-
-        ds_for_agg = {
-            "answer": agent_e_result.get("answer", "maybe"),
-            "confidence_score": agent_e_result.get("confidence_score", 0.0),
-            "reasoning": agent_e_result.get("reasoning", ""),
-            "source": "AgentE_FinalReport",
-            "raw_d_decision": agent_d_result.get("final_decision", {}).get("decision"),
-            "fusion_result": agent_d_result.get("fusion_result", {}),
+    if answer_arbiter is not None and direct_llm_result is not None:
+        print_title("[最终仲裁] 综合 D-S 证据路径与直接 LLM 路径")
+        ds_result = {
+            "answer": final_report.get("answer", "maybe" if task_mode == "YES_NO" else "UNKNOWN"),
+            "confidence_score": final_report.get("confidence_score", 0.0),
+            "reasoning": final_report.get("reasoning", ""),
+            "source": "evidence_fusion_report",
+            "raw_d_decision": fusion_analysis.get("final_decision", {}).get("decision"),
+            "fusion_result": fusion_analysis.get("fusion_result", {}),
         }
-        print(f"[调试] 传入聚合器的 DS 数据: Ans={ds_for_agg['answer']}, Conf={ds_for_agg['confidence_score']}")
-
-        final_aggregated_result = agent_final_agg.run(
+        final_aggregated_result = answer_arbiter.run(
             question=question,
-            ds_result=ds_for_agg,
+            ds_result=ds_result,
             direct_llm_result=direct_llm_result,
             task_mode=task_mode,
             verbose=True,
         )
-        print("\n最终聚合结果:")
+        print("\n最终仲裁结果:")
         print(json.dumps(final_aggregated_result, ensure_ascii=False, indent=2))
 
-    final_result = {
+    final_result: JsonDict = {
         "question": question,
-        "user_context": context.strip() if context and context.strip() else None,
-        "has_user_context": bool(context and context.strip()),
-        "total_rounds": current_round,
-        "retrieval_history": retrieval_history,
-        "total_evidence_count": len(enhanced_evidence_input),
-        "agent_a_analysis": agent_a_result,
-        "agent_b_analysis": agent_b_result,
-        "agent_c_evaluation": agent_c_result,
-        "agent_d_fusion": agent_d_result,
-        "final_report": agent_e_result,
+        "task_mode": task_mode,
+        "user_context": user_context or None,
+        "has_user_context": bool(user_context),
+        "retrieval_summary": {
+            "retrieved_count": len(retrieved_evidence),
+            "deduplicated_count": len(unique_retrieved_evidence),
+            "total_evidence_count": len(all_evidence),
+        },
+        "total_evidence_count": len(enhanced_evidence),
+        "agent_a_analysis": question_analysis,
+        "agent_b_analysis": evidence_analysis,
+        "agent_c_evaluation": evidence_evaluation,
+        "agent_d_fusion": fusion_analysis,
+        "final_report": final_report,
         "direct_llm_result": direct_llm_result,
         "final_aggregated_result": final_aggregated_result,
     }
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file = f"TEST_RESULTS/test_demo_result_{timestamp}.json"
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(final_result, f, ensure_ascii=False, indent=2)
+    result_dir = Path(output_dir)
+    result_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    output_file = result_dir / f"medar_qa_result_{timestamp}.json"
+    with output_file.open("w", encoding="utf-8") as handle:
+        json.dump(final_result, handle, ensure_ascii=False, indent=2)
 
     print("\n" + "=" * 80)
-    print("✓ 完整推理流程结束")
-    print(f"✓ 总轮次: {current_round}")
-    print(f"✓ 总证据数: {len(all_evidence)}")
+    print("✓ 单轮证据推理流程结束")
+    print(f"✓ 输入证据数: {len(all_evidence)}")
     print(f"✓ 结果已保存到: {output_file}")
     print("=" * 80)
 

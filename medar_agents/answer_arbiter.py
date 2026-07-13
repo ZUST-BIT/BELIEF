@@ -3,10 +3,11 @@
 import json
 from typing import Dict, Any, Optional
 
-from config import set_argument
 from prompt import Prompt_FinalAggregator, Prompt_FinalAggregator_YesNo
 from .json_utils import extract_json_from_response
 from .llm_chain import build_llm_chain
+from .numeric_utils import clamp_confidence, safe_float
+from .task_modes import SELECTION, normalize_task_mode
 
 
 class AnswerArbiter:
@@ -15,7 +16,6 @@ class AnswerArbiter:
     """
 
     def __init__(self):
-        self.args = set_argument()
         self.weight_exponent = 1.5
         self.override_margin = 0.12
         self.high_confidence = 0.75
@@ -28,24 +28,45 @@ class AnswerArbiter:
         )
 
     def _safe_float(self, x, default=0.0) -> float:
-        try:
-            return float(x)
-        except Exception:
-            return default
+        return safe_float(x, default=default)
+
+    def _safe_confidence(self, value: Any) -> float:
+        return clamp_confidence(value)
 
     def _normalize_mcq_option(self, x: str) -> str:
         if not x:
             return "UNKNOWN"
         x = str(x).strip().upper()
-        return x if x in {"A", "B", "C", "D", "E", "F"} else "UNKNOWN"
+        return x if x in {"A", "B", "C", "D"} else "UNKNOWN"
 
     def _normalize_yesno_answer(self, x: str) -> str:
         if not x:
             return "maybe"
-        x = str(x).strip().lower()
-        if x in {"yes", "true", "support", "supported"}:
+        x = str(x).strip().lower().replace("-", "_").replace(" ", "_")
+        if x in {
+            "yes",
+            "true",
+            "support",
+            "supported",
+            "strong_yes",
+            "support_association",
+            "fact_confirmed",
+            "favor_intervention",
+            "h",
+        }:
             return "yes"
-        if x in {"no", "false", "refute", "refuted"}:
+        if x in {
+            "no",
+            "false",
+            "refute",
+            "refuted",
+            "strong_no",
+            "refute_association",
+            "fact_contradicted",
+            "favor_comparator",
+            "no_significant_difference",
+            "¬h",
+        }:
             return "no"
         return "maybe"
 
@@ -61,6 +82,10 @@ class AnswerArbiter:
         if ans == "maybe":
             if tendency:
                 tend = str(tendency).lower()
+                if "strong_yes" in tend:
+                    return 0.6
+                if "strong_no" in tend:
+                    return -0.6
                 if "lean_yes" in tend:
                     return 0.3
                 if "lean_no" in tend:
@@ -73,13 +98,11 @@ class AnswerArbiter:
             option = self._normalize_mcq_option(
                 ds_result.get("selected_option", ds_result.get("answer", "UNKNOWN"))
             )
-            conf = self._safe_float(
+            conf = self._safe_confidence(
                 ds_result.get("confidence_score", ds_result.get("decision_confidence", 0.0)),
-                0.0,
             )
-            conflict = self._safe_float(
+            conflict = self._safe_confidence(
                 ds_result.get("fusion_result", {}).get("conflict_coefficient", 0.0),
-                0.0,
             )
             return {
                 "answer": option,
@@ -90,19 +113,21 @@ class AnswerArbiter:
             }
 
         answer = self._normalize_yesno_answer(ds_result.get("answer", "maybe"))
-        conf = self._safe_float(ds_result.get("confidence_score", 0.0), 0.0)
+        conf = self._safe_confidence(ds_result.get("confidence_score", 0.0))
         return {
             "answer": answer,
             "confidence": conf,
             "reason": ds_result.get("reasoning", ""),
-            "conflict": self._safe_float(ds_result.get("fusion_result", {}).get("conflict_coefficient", 0.0), 0.0),
+            "conflict": self._safe_confidence(
+                ds_result.get("fusion_result", {}).get("conflict_coefficient", 0.0)
+            ),
             "raw": ds_result,
         }
 
     def _extract_llm_info(self, llm_result: Dict[str, Any], is_mcq: bool) -> Dict[str, Any]:
         if is_mcq:
             option = self._normalize_mcq_option(llm_result.get("selected_option", "UNKNOWN"))
-            conf = self._safe_float(llm_result.get("confidence_score", 0.0), 0.0)
+            conf = self._safe_confidence(llm_result.get("confidence_score", 0.0))
             return {
                 "answer": option,
                 "confidence": conf,
@@ -112,7 +137,7 @@ class AnswerArbiter:
             }
 
         answer = self._normalize_yesno_answer(llm_result.get("answer", "maybe"))
-        conf = self._safe_float(llm_result.get("confidence_score", 0.0), 0.0)
+        conf = self._safe_confidence(llm_result.get("confidence_score", 0.0))
         return {
             "answer": answer,
             "confidence": conf,
@@ -224,6 +249,16 @@ class AnswerArbiter:
             recommended_answer = "maybe"
 
         agreement = (ds_ans == llm_ans)
+        ds_contribution = ds_score * w_ds
+        llm_contribution = llm_score * w_llm
+        if agreement and recommended_answer == ds_ans:
+            recommended_source = "BOTH"
+        elif abs(ds_contribution) > abs(llm_contribution):
+            recommended_source = "DS"
+        elif abs(llm_contribution) > abs(ds_contribution):
+            recommended_source = "LLM"
+        else:
+            recommended_source = "BALANCED"
 
         advice = [
             "Use weighted score as a prior, not as an absolute rule.",
@@ -239,6 +274,7 @@ class AnswerArbiter:
             "llm_confidence": round(llm_conf, 4),
             "agreement": agreement,
             "weighted_score": round(final_score, 4),
+            "recommended_source": recommended_source,
             "recommended_answer": recommended_answer,
             "advice": advice,
         }
@@ -249,8 +285,11 @@ class AnswerArbiter:
         ds_result: Dict[str, Any],
         direct_llm_result: Dict[str, Any],
         arbitration_context: Dict[str, Any],
+        task_mode: str = "SELECTION",
     ) -> str:
-        prompt_template = Prompt_FinalAggregator
+        task_mode = normalize_task_mode(task_mode)
+        is_mcq = task_mode == SELECTION
+        prompt_template = Prompt_FinalAggregator if is_mcq else Prompt_FinalAggregator_YesNo
         prompt = prompt_template.replace("{{QUESTION}}", question)
         prompt = prompt.replace("{{DS_RESULT}}", json.dumps(ds_result, ensure_ascii=False, indent=2))
         prompt = prompt.replace("{{DIRECT_LLM_RESULT}}", json.dumps(direct_llm_result, ensure_ascii=False, indent=2))
@@ -266,7 +305,7 @@ class AnswerArbiter:
         if not isinstance(result, dict):
             result = {}
 
-        legal_mcq = {"A", "B", "C", "D", "E", "F"}
+        legal_mcq = {"A", "B", "C", "D"}
         legal_yesno = {"yes", "no", "maybe"}
 
         recommended_answer = arbitration_context.get("recommended_answer", "UNKNOWN")
@@ -297,8 +336,7 @@ class AnswerArbiter:
         else:
             result["agreement"] = "disagree"
 
-        conf = self._safe_float(result.get("confidence_score", 0.0), 0.0)
-        conf = max(0.0, min(1.0, conf))
+        conf = self._safe_confidence(result.get("confidence_score", 0.0))
 
         if final_answer == recommended_answer:
             conf = max(conf, min(0.95, max(
@@ -337,7 +375,8 @@ class AnswerArbiter:
         task_mode: str = "SELECTION",
         verbose: bool = False,
     ) -> Dict[str, Any]:
-        is_mcq = (task_mode == "SELECTION")
+        task_mode = normalize_task_mode(task_mode)
+        is_mcq = task_mode == SELECTION
 
         ds_info = self._extract_ds_info(ds_result, is_mcq=is_mcq)
         llm_info = self._extract_llm_info(direct_llm_result, is_mcq=is_mcq)
@@ -365,6 +404,7 @@ class AnswerArbiter:
             ds_result=ds_result,
             direct_llm_result=direct_llm_result,
             arbitration_context=arbitration_context,
+            task_mode=task_mode,
         )
 
         response = self._chain.invoke(prompt)

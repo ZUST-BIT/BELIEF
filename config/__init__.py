@@ -19,6 +19,10 @@ from .settings import (
     DEVICE,
     # Think 模式控制
     DISABLE_THINKING,
+    # PubMed / NCBI E-utilities
+    NCBI_TOOL,
+    NCBI_EMAIL,
+    NCBI_API_KEY,
     # 模型微调参数
     MODEL_REASONING_LEVELS,
     MODEL_SYSTEM_PROMPTS,

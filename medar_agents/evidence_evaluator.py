@@ -3,7 +3,6 @@
 import re
 from typing import Dict, Any, List, Optional, Tuple
 
-from config import set_argument
 from prompt import Prompt_C_Optimized
 from llm_client import call_llm
 from .json_utils import extract_json_from_response
@@ -16,7 +15,6 @@ class EvidenceEvaluator:
     """
 
     def __init__(self):
-        self.args = set_argument()
         self._chain = build_llm_chain(
             lambda prompt: prompt,
             temperature=0,

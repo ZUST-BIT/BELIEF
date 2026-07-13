@@ -11,13 +11,11 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from config import NCBI_API_KEY, NCBI_EMAIL, NCBI_TOOL
+
 
 ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
-
-NCBI_TOOL = "MEDAR-QA"
-NCBI_EMAIL = "qq384438241@gmail.com"
-
 
 class PubMedOnlineSearcher:
     """Search PubMed online with ``esearch`` and fetch article metadata with ``efetch``."""
@@ -73,25 +71,42 @@ class PubMedOnlineSearcher:
         max_abstract_len: int = 1200,
         request_timeout: int = 15,
         retry: int = 2,
+        tool: str = NCBI_TOOL,
+        email: str = NCBI_EMAIL,
+        api_key: str = NCBI_API_KEY,
     ) -> None:
         self.top_k = top_k
         self.max_abstract_len = max_abstract_len
         self.request_timeout = request_timeout
         self.retry = retry
+        self.tool = tool
+        self.email = email
+        self.api_key = api_key
 
-    def search(self, query: str) -> List[Dict[str, Any]]:
+    def search(
+        self, query: str, top_k: Optional[int] = None
+    ) -> List[Dict[str, Any]]:
         """Return PubMed papers for a free-text or PubMed boolean query."""
-        pmids = self._esearch(query, retmax=self.top_k)
+        retmax = self.top_k if top_k is None else max(0, int(top_k))
+        if not query or not query.strip() or retmax == 0:
+            return []
+        pmids = self._esearch(query, retmax=retmax)
         if not pmids:
             return []
         return self._efetch(pmids)
 
     def _get(self, url: str, params: Dict[str, Any]) -> Optional[requests.Response]:
         """Send a GET request with retry support."""
+        user_agent = f"{self.tool}/1.0"
+        if self.email:
+            user_agent += f" ({self.email})"
         for attempt in range(self.retry + 1):
             try:
                 response = requests.get(
-                    url, params=params, timeout=self.request_timeout
+                    url,
+                    params=params,
+                    headers={"User-Agent": user_agent},
+                    timeout=self.request_timeout,
                 )
                 response.raise_for_status()
                 return response
@@ -142,9 +157,12 @@ class PubMedOnlineSearcher:
             "retmax": retmax,
             "retmode": "json",
             "sort": "relevance",
-            "tool": NCBI_TOOL,
-            "email": NCBI_EMAIL,
+            "tool": self.tool,
         }
+        if self.email:
+            params["email"] = self.email
+        if self.api_key:
+            params["api_key"] = self.api_key
         response = self._get(ESEARCH_URL, params)
         if response is None:
             return []
@@ -164,9 +182,12 @@ class PubMedOnlineSearcher:
             "id": ",".join(pmids),
             "rettype": "abstract",
             "retmode": "xml",
-            "tool": NCBI_TOOL,
-            "email": NCBI_EMAIL,
+            "tool": self.tool,
         }
+        if self.email:
+            params["email"] = self.email
+        if self.api_key:
+            params["api_key"] = self.api_key
         response = self._get(EFETCH_URL, params)
         if response is None:
             return []

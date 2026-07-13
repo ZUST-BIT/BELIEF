@@ -1,9 +1,7 @@
 """Evidence analyzer agent."""
 
-import json
 from typing import Dict, Any, List, Optional
 
-from config import set_argument
 from prompt import Prompt_B
 from .json_utils import extract_json_from_response
 from .llm_chain import build_llm_chain
@@ -15,7 +13,6 @@ class EvidenceAnalyzer:
     """
 
     def __init__(self):
-        self.args = set_argument()
         self._chain = build_llm_chain(
             lambda evidence_text: Prompt_B.replace("{{EVIDENCE_TEXT}}", evidence_text),
             temperature=0,

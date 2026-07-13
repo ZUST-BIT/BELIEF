@@ -49,6 +49,11 @@ DEVICE = os.getenv("MEDAR_DEVICE", "cuda")
 # ==================== Think 模式控制 ====================
 DISABLE_THINKING = _bool(os.getenv("MEDAR_DISABLE_THINKING"), default=True)
 
+# ==================== PubMed / NCBI E-utilities ====================
+NCBI_TOOL = os.getenv("MEDAR_NCBI_TOOL", "MEDAR-QA")
+NCBI_EMAIL = os.getenv("MEDAR_NCBI_EMAIL", "")
+NCBI_API_KEY = os.getenv("MEDAR_NCBI_API_KEY", "")
+
 # ==================== 模型微调参数 ====================
 MODEL_REASONING_LEVELS = {
     "gpt-oss:20b": "high",

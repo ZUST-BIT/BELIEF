@@ -1,4 +1,4 @@
-"""Public exports for refactored agents."""
+"""Public MEDAR-QA agent API."""
 
 from .json_utils import extract_json_from_response
 from .question_analyzer import QuestionAnalyzer
@@ -8,7 +8,7 @@ from .evidence_fusion_engine import EvidenceFusionEngine
 from .report_generator import ReportGenerator
 from .direct_reasoning_agent import DirectReasoningAgent
 from .answer_arbiter import AnswerArbiter
-from .completeness_controller import EvidenceCompletenessController
+from .task_modes import SUPPORTED_TASK_MODES, normalize_task_mode
 
 __all__ = [
     "extract_json_from_response",
@@ -19,5 +19,6 @@ __all__ = [
     "ReportGenerator",
     "DirectReasoningAgent",
     "AnswerArbiter",
-    "EvidenceCompletenessController",
+    "SUPPORTED_TASK_MODES",
+    "normalize_task_mode",
 ]

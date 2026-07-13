@@ -4,10 +4,11 @@ import json
 import re
 from typing import Dict, Any, Optional
 
-from config import set_argument
 from prompt import Prompt_DirectLLM, Prompt_DirectLLM_YesNo
 from .json_utils import extract_json_from_response
 from .llm_chain import build_llm_chain
+from .numeric_utils import clamp_confidence
+from .task_modes import SELECTION, normalize_task_mode
 
 
 class DirectReasoningAgent:
@@ -16,7 +17,6 @@ class DirectReasoningAgent:
     """
 
     def __init__(self):
-        self.args = set_argument()
         self._chain = build_llm_chain(
             lambda prompt: prompt,
             temperature=0.4,
@@ -54,12 +54,9 @@ class DirectReasoningAgent:
         if not isinstance(result, dict):
             result = {}
 
-        conf = result.get("confidence_score", 0.0)
-        try:
-            conf = float(conf)
-        except Exception:
-            conf = 0.0
-        result["confidence_score"] = max(0.0, min(1.0, conf))
+        result["confidence_score"] = clamp_confidence(
+            result.get("confidence_score", 0.0)
+        )
 
         if is_mcq:
             sel = str(result.get("selected_option", "UNKNOWN")).strip().upper()
@@ -72,17 +69,25 @@ class DirectReasoningAgent:
 
         if ans in {"yes", "no", "maybe"}:
             normalized_answer = ans
-        elif ans in {"true", "y", "1"}:
+        elif ans in {"true", "y", "1", "strong_yes"}:
             normalized_answer = "yes"
-        elif ans in {"false", "n", "0"}:
+        elif ans in {"false", "n", "0", "strong_no"}:
             normalized_answer = "no"
         elif ans in {"uncertain", "unknown", "inconclusive"}:
             normalized_answer = "maybe"
         else:
-            normalized_answer = "maybe" if tendency in {"lean_yes", "lean_no", "balanced"} else "UNKNOWN"
+            normalized_answer = (
+                "maybe"
+                if tendency in {"lean_yes", "lean_no", "balanced", "strong_yes", "strong_no"}
+                else "UNKNOWN"
+            )
 
         result["answer"] = normalized_answer
-        result["directional_tendency"] = tendency if tendency in {"lean_yes", "lean_no", "balanced"} else "balanced"
+        result["directional_tendency"] = (
+            tendency
+            if tendency in {"lean_yes", "lean_no", "balanced", "strong_yes", "strong_no"}
+            else "balanced"
+        )
         result.setdefault("uncertainty_note", "")
         result.setdefault("key_evidence_used", [])
         return result
@@ -94,7 +99,8 @@ class DirectReasoningAgent:
         task_mode: str = "SELECTION",
         verbose: bool = False,
     ) -> Dict[str, Any]:
-        is_mcq = (task_mode == "SELECTION")
+        task_mode = normalize_task_mode(task_mode)
+        is_mcq = task_mode == SELECTION
 
         if verbose:
             print(f"\n{'='*60}")
@@ -121,7 +127,7 @@ class DirectReasoningAgent:
                 summary["content_snippet"] = ev.get("original_content", "")[:600]
             evidence_summaries.append(summary)
 
-        prompt_template = Prompt_DirectLLM
+        prompt_template = Prompt_DirectLLM if is_mcq else Prompt_DirectLLM_YesNo
         prompt = prompt_template.replace("{{QUESTION}}", question)
         prompt = prompt.replace(
             "{{ANALYZED_EVIDENCE}}",

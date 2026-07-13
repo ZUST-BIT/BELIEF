@@ -3,7 +3,6 @@
 import json
 from typing import Dict, Any
 
-from config import set_argument
 from prompt import Prompt_A
 from .json_utils import extract_json_from_response
 from .llm_chain import build_llm_chain
@@ -15,7 +14,6 @@ class QuestionAnalyzer:
     """
 
     def __init__(self):
-        self.args = set_argument()
         self._chain = build_llm_chain(
             lambda question: Prompt_A.replace("{{QUESTION}}", question),
             temperature=0,

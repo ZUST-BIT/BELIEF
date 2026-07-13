@@ -10,8 +10,16 @@ def extract_json_from_response(response: str) -> Optional[Dict[str, Any]]:
     Extract a JSON object from a raw LLM response.
     Handles think tags, code fences, and trailing text.
     """
-    if not response:
+    if not isinstance(response, str) or not response.strip():
         return None
+
+    def _load_object(candidate: str) -> Optional[Dict[str, Any]]:
+        """Parse one JSON candidate and accept objects only."""
+        try:
+            value = json.loads(candidate, strict=False)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return None
+        return value if isinstance(value, dict) else None
 
     # Step 0: strip <think>...</think> blocks if present
     if "</think>" in response:
@@ -24,10 +32,9 @@ def extract_json_from_response(response: str) -> Optional[Dict[str, Any]]:
             inner = response.split("<think>", 1)[1]
             fb, lb = inner.find("{"), inner.rfind("}")
             if fb != -1 and lb > fb:
-                try:
-                    return json.loads(inner[fb:lb + 1], strict=False)
-                except json.JSONDecodeError:
-                    pass
+                result = _load_object(inner[fb:lb + 1])
+                if result is not None:
+                    return result
 
     if not response:
         return None
@@ -69,35 +76,27 @@ def extract_json_from_response(response: str) -> Optional[Dict[str, Any]]:
         parts = response.split("```json")
         for chunk in reversed(parts[1:]):
             json_str = chunk.split("```")[0].strip()
-            try:
-                return json.loads(json_str, strict=False)
-            except json.JSONDecodeError:
-                continue
+            result = _load_object(json_str)
+            if result is not None:
+                return result
 
     # Method 2: last ``` ... ``` block
     if "```" in response:
         parts = response.split("```")
         code_blocks = [parts[k].strip() for k in range(1, len(parts), 2)]
         for block in reversed(code_blocks):
-            try:
-                return json.loads(block, strict=False)
-            except json.JSONDecodeError:
-                continue
+            result = _load_object(block)
+            if result is not None:
+                return result
 
     # Method 3: scan candidate JSON spans
     spans = _scan_json_spans(response)
     if spans:
         spans_sorted = sorted(spans, key=lambda x: x[1] - x[0], reverse=True)
         for start, end in spans_sorted:
-            try:
-                return json.loads(response[start:end], strict=False)
-            except json.JSONDecodeError:
-                continue
+            result = _load_object(response[start:end])
+            if result is not None:
+                return result
 
     # Method 4: whole response
-    try:
-        return json.loads(response.strip(), strict=False)
-    except json.JSONDecodeError:
-        pass
-
-    return None
+    return _load_object(response.strip())

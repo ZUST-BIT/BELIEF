@@ -8,9 +8,6 @@ class EvidenceFusionEngine:
     Pure DS fusion and decision making without any LLM calls.
     """
 
-    def __init__(self):
-        pass
-
     def calculate_conflict_coefficient(self, bpa1: Dict[str, float], bpa2: Dict[str, float]) -> float:
         option_keys = [k for k in set(list(bpa1.keys()) + list(bpa2.keys())) if k != "uncertainty_theta"]
         k_value = 0.0
@@ -116,16 +113,18 @@ class EvidenceFusionEngine:
     def fuse_evidence(self, bpa_list: List[Dict[str, float]]) -> Dict[str, Any]:
         if not bpa_list:
             return {
-                "fused_bpa": {
-                    "support_hypothesis": 0.0,
-                    "against_hypothesis": 0.0,
-                    "uncertainty": 1.0,
-                },
+                "fused_bpa": {"uncertainty_theta": 1.0},
                 "method": "none",
+                "strategy": "none",
                 "conflict_coefficient": 0.0,
             }
         if len(bpa_list) == 1:
-            return {"fused_bpa": bpa_list[0], "method": "single", "conflict_coefficient": 0.0}
+            return {
+                "fused_bpa": dict(bpa_list[0]),
+                "method": "single",
+                "strategy": "single",
+                "conflict_coefficient": 0.0,
+            }
 
         conflicts = [
             self.calculate_conflict_coefficient(bpa_list[i], bpa_list[i + 1])
